@@ -84,6 +84,7 @@ class deletable_row stub [[writable]] {
 
 class range_tombstone stub [[writable]] {
     clustering_key_prefix start;
+    clustering_key_prefix stop;
     tombstone tomb;
 };
 
