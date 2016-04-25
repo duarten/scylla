@@ -90,7 +90,7 @@ enum class bound_kind : uint8_t {
     excl_start_bound,
 };
 
-class range_tombstone stub [[writable]] {
+class range_tombstone [[writable]] {
     clustering_key_prefix start;
     tombstone tomb;
     bound_kind start_kind = incl_start_bound;
