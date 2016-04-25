@@ -110,6 +110,7 @@ public:
  */
 class range_tombstone final {
     boost::intrusive::set_member_hook<> _link;
+    friend class range_tombstone_list;
 public:
     clustering_key_prefix start;
     bound_kind start_kind;

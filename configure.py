@@ -475,6 +475,7 @@ scylla_core = (['database.cc',
                  'auth/password_authenticator.cc',
                  'auth/permission.cc',
                  'range_tombstone.cc',
+                 'range_tombstone_list.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
