@@ -19,12 +19,16 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "range_tombstone.hh"
+#include "range_tombstone_list.hh"
 
 range_tombstone::range_tombstone(range_tombstone&& rt) noexcept
-    : start(std::move(rt.start))
+    : _link()
+    , start(std::move(rt.start))
     , stop(std::move(rt.stop))
     , tomb(std::move(rt.tomb)) {
+    using container_type = range_tombstone_list::range_tombstones_type;
+    container_type::node_algorithms::replace_node(rt._link.this_ptr(), _link.this_ptr());
+    container_type::node_algorithms::init(rt._link.this_ptr());
 }
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {

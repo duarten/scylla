@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <boost/intrusive/set.hpp>
 #include "hashing.hh"
 #include "keys.hh"
 #include "tombstone.hh"
@@ -29,23 +30,28 @@
  * Represents a ranged deletion operation. Can be empty.
  */
 class range_tombstone final {
+    boost::intrusive::set_member_hook<> _link;
+    friend class range_tombstone_list;
 public:
     clustering_key_prefix start;
     clustering_key_prefix stop;
     tombstone tomb;
 
     range_tombstone(const clustering_key_prefix& start, const clustering_key_prefix& stop, tombstone tomb)
-        : start(start)
+        : _link()
+        , start(start)
         , stop(stop)
         , tomb(std::move(tomb))
     { }
     range_tombstone(clustering_key_prefix&& start, clustering_key_prefix&& stop, tombstone tomb)
-        : start(std::move(start))
+        : _link()
+        , start(std::move(start))
         , stop(std::move(stop))
         , tomb(std::move(tomb))
     { }
     range_tombstone()
-        : start(std::vector<bytes>())
+        : _link()
+        , start(std::vector<bytes>())
         , stop(std::vector<bytes>())
         , tomb()
     { }
