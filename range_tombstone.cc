@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "range_tombstone.hh"
+#include "range_tombstone_list.hh"
 
 std::ostream& operator<<(std::ostream& out, const bound_kind k) {
     switch(k) {
