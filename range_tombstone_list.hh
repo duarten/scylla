@@ -64,6 +64,7 @@ public:
     }
     void add(const schema& s, clustering_key_prefix start, clustering_key_prefix stop, tombstone tomb);
     tombstone search_tombstone_covering(const schema& s, const clustering_key& key) const;
+    range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     template <typename Func>
     void erase_where(Func filter) {
         auto it = begin();
