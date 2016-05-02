@@ -206,3 +206,34 @@ tombstone range_tombstone_list::search_tombstone_covering(const schema& s, const
 
     return it->tomb;
 }
+
+void range_tombstone_list::apply(const schema& s, range_tombstone_list& rt_list) {
+    for (auto&& rt : rt_list) {
+        add(s, rt);
+    }
+}
+
+// See reversibly_mergeable.hh
+range_tombstone_list::revert_apply range_tombstone_list::apply_reversibly(const schema& s, range_tombstone_list& rt_list) {
+    return range_tombstone_list::revert_apply(s, rt_list, *this);
+}
+
+range_tombstone_list::revert_apply::revert_apply(const schema& s, range_tombstone_list& src, range_tombstone_list& dst)
+        : _dst(dst)
+        , _snapshot(dst) {
+    try {
+        dst.apply(s, src);
+    } catch (...) {
+        revert();
+        throw;
+    }
+}
+
+void range_tombstone_list::revert_apply::cancel() {
+    _snapshot._tombstones.clear_and_dispose(current_deleter<range_tombstone>());
+}
+
+void range_tombstone_list::revert_apply::revert() {
+    _dst._tombstones.swap(_snapshot._tombstones);
+    _snapshot._tombstones.clear_and_dispose(current_deleter<range_tombstone>());
+}

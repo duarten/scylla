@@ -75,6 +75,24 @@ public:
             }
         }
     }
+    class revert_apply;
+    void apply(const schema& s, range_tombstone_list& rt_list);
+    // See reversibly_mergeable.hh
+    revert_apply apply_reversibly(const schema& s, range_tombstone_list& rt_list);
 private:
     void insert_from(const schema& s, range_tombstones_type::iterator it, clustering_key_prefix start, clustering_key_prefix stop, tombstone tomb);
+};
+
+class range_tombstone_list::revert_apply {
+    private:
+    range_tombstone_list& _dst;
+    range_tombstone_list _snapshot;
+    public:
+    revert_apply(const schema& s, range_tombstone_list& src, range_tombstone_list& dst);
+    ~revert_apply() {
+            revert();
+        }
+    void cancel();
+    private:
+    void revert();
 };
