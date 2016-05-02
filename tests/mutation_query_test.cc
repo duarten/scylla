@@ -27,6 +27,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <query-result-set.hh>
+#include <seastar/core/distributed.hh>
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -37,6 +38,7 @@
 #include "core/thread.hh"
 #include "schema_builder.hh"
 #include "partition_slice_builder.hh"
+#include "service/storage_service.hh"
 
 #include "disk-error-handler.hh"
 
@@ -44,6 +46,19 @@ thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
 using namespace std::literals::chrono_literals;
+
+template<typename Func>
+static auto with_storage_service(Func&& f) {
+    return seastar::async([f = std::forward<Func>(f)] {
+        distributed<database> db;
+        net::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        service::get_storage_service().start(std::ref(db)).get();
+        f();
+        service::get_storage_service().stop().get();
+        net::get_messaging_service().stop().get();
+        db.stop().get();
+    });
+}
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -62,7 +77,6 @@ struct mutation_less_cmp {
         return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
     }
 };
-
 mutation_source make_source(std::vector<mutation> mutations) {
     return mutation_source([mutations = std::move(mutations)] (schema_ptr s, const query::partition_range& range) {
         assert(range.is_full()); // slicing not implemented yet
@@ -82,7 +96,7 @@ query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, cons
 }
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -134,7 +148,7 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
 }
 
 SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -181,7 +195,7 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 }
 
 SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -376,7 +390,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 }
 
 SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -397,7 +411,7 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
 }
 
 SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = schema_builder("ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
@@ -446,7 +460,7 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 }
 
 SEASTAR_TEST_CASE(test_result_row_count) {
-    return seastar::async([] {
+    return with_storage_service([] {
             auto s = make_schema();
             auto now = gc_clock::now();
             auto slice = partition_slice_builder(*s).build();

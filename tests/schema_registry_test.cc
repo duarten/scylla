@@ -22,11 +22,13 @@
 #define BOOST_TEST_DYN_LINK
 
 #include <seastar/core/thread.hh>
+#include <seastar/core/distributed.hh>
 
 #include "tests/test-utils.hh"
 #include "schema_registry.hh"
 #include "schema_builder.hh"
 #include "mutation_source_test.hh"
+#include "service/storage_service.hh"
 
 #include "disk-error-handler.hh"
 
@@ -37,6 +39,19 @@ static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
 }
 
+template<typename Func>
+static auto with_storage_service(Func&& f) {
+    return seastar::async([f = std::forward<Func>(f)] {
+        distributed<database> db;
+        net::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        service::get_storage_service().start(std::ref(db)).get();
+        f();
+        service::get_storage_service().stop().get();
+        net::get_messaging_service().stop().get();
+        db.stop().get();
+    });
+}
+
 static schema_ptr random_schema() {
     return schema_builder("ks", "cf")
            .with_column("pk", bytes_type, column_kind::partition_key)
@@ -45,7 +60,7 @@ static schema_ptr random_schema() {
 }
 
 SEASTAR_TEST_CASE(test_async_loading) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s1 = random_schema();
         auto s2 = random_schema();
 
@@ -70,7 +85,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
 }
 
 SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = random_schema();
         s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
         BOOST_REQUIRE(!s->is_synced());
@@ -80,7 +95,7 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
 }
 
 SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = random_schema();
         s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
         BOOST_REQUIRE(!s->is_synced());
@@ -90,7 +105,7 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
 }
 
 SEASTAR_TEST_CASE(test_failed_sync_can_be_retried) {
-    return seastar::async([] {
+    return with_storage_service([] {
         auto s = random_schema();
         s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
         BOOST_REQUIRE(!s->is_synced());
