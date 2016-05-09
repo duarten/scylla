@@ -56,6 +56,9 @@ class feature final {
         });
     }
 public:
+    feature()
+            : _enabled(false)
+    { }
     const sstring& name() const {
         return _name;
     }
