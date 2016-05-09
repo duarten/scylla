@@ -58,6 +58,7 @@
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
 #include "disk-error-handler.hh"
+#include "gms/gossip_feature.hh"
 
 namespace transport {
     class cql_server;
@@ -97,6 +98,7 @@ public:
     };
 private:
     using token = dht::token;
+    #include "seastar/core/gate.hh"
     using token_range = dht::token_range;
     using endpoint_details = dht::endpoint_details;
     using boot_strapper = dht::boot_strapper;
@@ -265,6 +267,9 @@ private:
 #endif
 private:
     std::unordered_set<token> _bootstrap_tokens;
+
+    static const sstring RANGE_TOMBSTONES_FEATURE;
+    gms::gossip_feature _range_tombstones_feature = gms::gossip_feature(RANGE_TOMBSTONES_FEATURE);
 
 public:
     void finish_bootstrapping() {
@@ -2356,6 +2361,10 @@ private:
     void do_isolate_on_error(disk_error type);
 public:
     static sstring get_config_supported_features();
+
+    bool cluster_supports_range_tombstones() {
+        return bool(_range_tombstones_feature);
+    }
 };
 
 inline future<> init_storage_service(distributed<database>& db) {

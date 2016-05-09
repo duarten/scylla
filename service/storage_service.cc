@@ -78,6 +78,8 @@ namespace service {
 
 static logging::logger logger("storage_service");
 
+const sstring storage_service::RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
+
 distributed<storage_service> _the_storage_service;
 
 int get_generation_number() {
@@ -95,7 +97,7 @@ sstring storage_service::get_config_supported_features() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    return sstring("");
+    return RANGE_TOMBSTONES_FEATURE;
 }
 
 std::set<inet_address> get_seeds() {
@@ -215,6 +217,8 @@ void storage_service::prepare_to_join() {
     auto& proxy = service::get_storage_proxy();
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
     update_schema_version_and_announce(proxy).get();// Ensure we know our own actual Schema UUID in preparation for updates
+
+    _range_tombstones_feature.check_support();
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
