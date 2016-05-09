@@ -95,7 +95,7 @@ sstring storage_service::get_config_supported_features() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    return sstring("");
+    return sstring("RANGE_TOMBSTONES");
 }
 
 std::set<inet_address> get_seeds() {
@@ -215,6 +215,12 @@ void storage_service::prepare_to_join() {
     auto& proxy = service::get_storage_proxy();
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
     update_schema_version_and_announce(proxy).get();// Ensure we know our own actual Schema UUID in preparation for updates
+
+    gossiper.wait_for_feature_on_all_node(std::set<sstring>{"RANGE_TOMBSTONES"}).then([] {
+        _the_storage_service.invoke_on_all([] (auto& service) {
+            service._supports_range_tombstones = true;
+        });
+    });
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());

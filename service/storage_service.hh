@@ -266,6 +266,8 @@ private:
 private:
     std::unordered_set<token> _bootstrap_tokens;
 
+    bool _supports_range_tombstones;
+
 public:
     void finish_bootstrapping() {
         _is_bootstrap_mode = false;
@@ -2356,6 +2358,10 @@ private:
     void do_isolate_on_error(disk_error type);
 public:
     static sstring get_config_supported_features();
+
+    bool cluster_supports_range_tombstones() {
+        return _supports_range_tombstones;
+    }
 };
 
 inline future<> init_storage_service(distributed<database>& db) {
