@@ -26,6 +26,7 @@
 #include <sstream>
 #include <unordered_set>
 #include <experimental/optional>
+#include <stack>
 
 template<typename PrintableRange>
 static inline
@@ -75,6 +76,14 @@ to_string(std::initializer_list<Printable> items) {
     return "[" + join(", ", std::begin(items), std::end(items)) + "]";
 }
 
+
+template<typename Printable, typename Container>
+static inline
+sstring
+to_string(std::stack<Printable, Container> items) {
+    return sprint("%s", items);
+}
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::unordered_set<T>& items) {
     os << "{" << join(", ", items) << "}";
@@ -93,6 +102,22 @@ std::ostream& operator<<(std::ostream& os, const std::experimental::optional<T>&
         os << "{" << *opt << "}";
     } else {
         os << "{}";
+    }
+    return os;
+}
+
+
+template <typename T, typename Container>
+std::ostream& operator<<(std::ostream& os, std::stack<T, Container>& items) {
+    std::vector<T> tmp;
+    while (!items.empty()) {
+        tmp.emplace_back(std::move(items.top()));
+        items.pop();
+    }
+    os << tmp;
+    while (!tmp.empty()) {
+        items.emplace(std::move(tmp.back()));
+        tmp.pop_back();
     }
     return os;
 }
