@@ -1520,6 +1520,7 @@ future<> gossiper::do_stop_gossiping() {
             if (engine().cpu_id() == 0) {
                 get_local_failure_detector().unregister_failure_detection_event_listener(&g);
             }
+            g.features.stop().get();
             g.uninit_messaging_service_handler();
             return make_ready_future<>();
         }).get();
@@ -1741,25 +1742,45 @@ std::set<sstring> gossiper::get_supported_features() const {
     return common_features;
 }
 
-static future<stop_iteration> check_features(auto features, auto need_features) {
+static future<stop_iteration> check_features(auto features, auto need_features, seastar::gate& gate) {
     logger.info("Checking if need_features {} in features {}", need_features, features);
     if (std::includes(features.begin(), features.end(), need_features.begin(), need_features.end())) {
         return make_ready_future<stop_iteration>(stop_iteration::yes);
     }
-    return sleep(std::chrono::seconds(2)).then([] {
+    return sleep(std::chrono::seconds(2)).then([&gate] {
+        gate.check(); // Completes the future wih an exception
         return make_ready_future<stop_iteration>(stop_iteration::no);
     });
 }
 
-future<> gossiper::wait_for_feature_on_all_node(std::set<sstring> features) const {
-    return repeat([this, features] {
-        return check_features(get_supported_features(), features);
+future<> gossiper::wait_for_feature_on_all_node(std::set<sstring> features, seastar::gate& gate) const {
+    return with_gate(gate, [this, features = std::move(features), &gate] {
+        return repeat([this, features = std::move(features), &gate] {
+            return check_features(get_supported_features(), features, gate);
+        });
     });
 }
 
-future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint) const {
-    return repeat([this, features, endpoint] {
-        return check_features(get_supported_features(endpoint), features);
+future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint, seastar::gate& gate) const {
+    return with_gate(gate, [this, features = std::move(features), endpoint = std::move(endpoint), &gate] {
+        return repeat([this, features = std::move(features), endpoint = std::move(endpoint), &gate] {
+            return check_features(get_supported_features(endpoint), features, gate);
+        });
+    });
+}
+
+feature gossiper::make_feature(sstring name) {
+    return feature(features, std::move(name));
+}
+
+future<bool> feature_manager::check_support_for(sstring feature) {
+    return get_local_gossiper().wait_for_feature_on_all_node({feature}, _g).then([] {
+        return true;
+    }).handle_exception([](auto&& ep) {
+        try {
+            std::rethrow_exception(ep);
+        } catch (seastar::gate_closed_exception& ignored) { }
+        return false;
     });
 }
 

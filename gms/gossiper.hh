@@ -48,12 +48,14 @@
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
+#include "gms/feature.hh"
 #include "message/messaging_service.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include "seastar/core/gate.hh"
 
 namespace gms {
 
@@ -64,6 +66,7 @@ class gossip_digest;
 class inet_address;
 class i_endpoint_state_change_subscriber;
 class i_failure_detector;
+class gossip_feature;
 
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
@@ -514,15 +517,18 @@ private:
     uint64_t _nr_run = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+    feature_manager features;
 public:
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about
     std::set<sstring> get_supported_features() const;
     // Wait for features are available on all nodes this node knows about
-    future<> wait_for_feature_on_all_node(std::set<sstring> features) const;
+    future<> wait_for_feature_on_all_node(std::set<sstring> features, seastar::gate& gate) const;
     // Wait for features are available on a particular node
-    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint) const;
+    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint, seastar::gate& gate) const;
+    // Returns an object that encapsulated support for a particular feature across all nodes this node knows about
+    feature make_feature(sstring name);
 };
 
 extern distributed<gossiper> _the_gossiper;
