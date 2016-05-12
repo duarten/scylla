@@ -521,10 +521,10 @@ public:
     std::set<sstring> get_supported_features() const;
     // Wait for features are available on all nodes this node knows about
     future<> wait_for_feature_on_all_node(std::set<sstring> features,
-            std::chrono::seconds timeout = std::chrono::seconds(300)) const;
+            std::chrono::seconds timeout = std::chrono::seconds::max) const;
     // Wait for features are available on a particular node
     future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint,
-            std::chrono::seconds timeout = std::chrono::seconds(300)) const;
+            std::chrono::seconds timeout = std::chrono::seconds::max) const;
 };
 
 extern distributed<gossiper> _the_gossiper;
