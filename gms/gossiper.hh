@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include "seastar/core/gate.hh"
 
 namespace gms {
 
@@ -64,6 +65,7 @@ class gossip_digest;
 class inet_address;
 class i_endpoint_state_change_subscriber;
 class i_failure_detector;
+class gossip_feature;
 
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
@@ -521,10 +523,13 @@ public:
     std::set<sstring> get_supported_features() const;
     // Wait for features are available on all nodes this node knows about
     future<> wait_for_feature_on_all_node(std::set<sstring> features,
-            std::chrono::seconds timeout = std::chrono::seconds::max) const;
+            seastar::gate& gate,
+            std::chrono::seconds timeout = std::chrono::seconds::max()) const;
     // Wait for features are available on a particular node
-    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint,
-            std::chrono::seconds timeout = std::chrono::seconds::max) const;
+    future<> wait_for_feature_on_node(std::set<sstring> features,
+            inet_address endpoint,
+            seastar::gate& gate,
+            std::chrono::seconds timeout = std::chrono::seconds::max()) const;
 };
 
 extern distributed<gossiper> _the_gossiper;

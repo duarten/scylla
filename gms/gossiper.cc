@@ -1749,7 +1749,7 @@ std::set<sstring> gossiper::get_supported_features() const {
     return common_features;
 }
 
-static future<stop_iteration> check_features(auto features, auto need_features, auto expire) {
+static future<stop_iteration> check_features(auto features, auto need_features, auto expire, seastar::gate& gate) {
     logger.info("Checking if need_features {} in features {}", need_features, features);
     if (std::includes(features.begin(), features.end(), need_features.begin(), need_features.end())) {
         return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -1757,24 +1757,40 @@ static future<stop_iteration> check_features(auto features, auto need_features, 
     if (gossiper::now() > expire) {
         throw std::runtime_error(sprint("Unable to wait for feature %s", need_features));
     } else {
-        return sleep(std::chrono::seconds(2)).then([] {
+        return sleep(std::chrono::seconds(2)).then([&gate] {
+            gate.check(); // Completes the future wih an exception
             return make_ready_future<stop_iteration>(stop_iteration::no);
         });
     }
 }
 
-future<> gossiper::wait_for_feature_on_all_node(std::set<sstring> features, std::chrono::seconds timeout) const {
+future<> gossiper::wait_for_feature_on_all_node(
+        std::set<sstring> features,
+        seastar::gate& gate,
+        std::chrono::seconds timeout) const {
     auto expire = now() + timeout;
-    return repeat([this, features, expire] {
-        return check_features(get_supported_features(), features, expire);
+    gate.enter();
+    return repeat([this, features, expire, &gate] {
+        return check_features(get_supported_features(), features, expire, gate);
+    }).finally([&gate] {
+        gate.leave();
     });
 }
 
-future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint, std::chrono::seconds timeout) const {
+future<> gossiper::wait_for_feature_on_node(
+        std::set<sstring> features,
+        inet_address endpoint,
+        seastar::gate& gate,
+        std::chrono::seconds timeout) const {
     auto expire = now() + timeout;
-    return repeat([this, features, endpoint, expire] {
-        return check_features(get_supported_features(endpoint), features, expire);
+    gate.enter();
+    return repeat([this, features, endpoint, expire, &gate] {
+        return check_features(get_supported_features(endpoint), features, expire, gate);
+    }).finally([&gate] {
+        gate.leave();
     });
 }
+
+
 
 } // namespace gms
