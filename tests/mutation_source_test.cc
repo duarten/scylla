@@ -472,8 +472,21 @@ public:
 
         size_t range_tombstone_count = row_count_dist(_gen);
         for (size_t i = 0; i < range_tombstone_count; ++i) {
-            auto key = clustering_key::from_exploded(*_schema, {random_blob()});
-            m.partition().apply_row_tombstone(*_schema, key, random_tombstone());
+            clustering_key_prefix::less_compare less(*_schema);
+            auto start = clustering_key::from_exploded(*_schema, {random_blob()});
+            constexpr size_t max_retries = 10;
+            size_t attempt;
+            for (attempt = 0; attempt < max_retries; ++attempt) {
+                auto end = clustering_key::from_exploded(*_schema, {random_blob()});
+                if (!less(end, start)) {
+                    m.partition().apply_row_tombstone(*_schema,
+                            range_tombstone(std::move(start), std::move(end), random_tombstone()));
+                    break;
+                }
+            }
+            if (attempt == max_retries) {
+                m.partition().apply_row_tombstone(*_schema, start, random_tombstone());
+            }
         }
         return m;
     }
