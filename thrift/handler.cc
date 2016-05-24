@@ -332,19 +332,8 @@ public:
                                 if (def->kind != column_kind::regular_column) {
                                     throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
                                 }
-                                gc_clock::duration ttl;
-                                if (col.__isset.ttl) {
-                                    ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
-                                }
-                                if (ttl.count() <= 0) {
-                                    ttl = schema->default_time_to_live();
-                                }
-                                ttl_opt maybe_ttl;
-                                if (ttl.count() > 0) {
-                                    maybe_ttl = ttl;
-                                }
                                 m_to_apply.set_clustered_cell(empty_clustering_key, *def,
-                                    atomic_cell::make_live(col.timestamp, to_bytes(col.value), maybe_ttl));
+                                    atomic_cell::make_live(col.timestamp, to_bytes(col.value), maybe_ttl(*schema, col)));
                             } else if (cosc.__isset.super_column) {
                                 // FIXME: implement
                             } else if (cosc.__isset.counter_column) {
@@ -683,6 +672,19 @@ private:
             fail(unimplemented::cause::THRIFT);
         }
         return partition_key::from_single_value(*s, std::move(k));
+    }
+    static ttl_opt maybe_ttl(const schema& s, const Column& col) {
+        if (col.__isset.ttl) {
+            auto ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
+            if (ttl.count() <= 0) {
+                throw make_exception<InvalidRequestException>("ttl must be positive");
+            }
+            if (ttl > max_ttl) {
+                throw make_exception<InvalidRequestException>("ttl is too large");
+            }
+            return {ttl};
+        }
+        return { };
     }
 };
 
