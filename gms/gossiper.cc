@@ -597,6 +597,7 @@ void gossiper::run() {
                 if (endpoint_map_changed) {
                     shadow_endpoint_state_map = endpoint_state_map;
                     _features_condvar.broadcast();
+                    maybe_enable_features();
                 }
 
                 if (live_endpoint_changed) {
@@ -614,6 +615,7 @@ void gossiper::run() {
                         if (endpoint_map_changed) {
                             local_gossiper.endpoint_state_map = shadow_endpoint_state_map;
                             local_gossiper._features_condvar.broadcast();
+                            local_gossiper.maybe_enable_features();
                         }
 
                         if (live_endpoint_changed) {
@@ -1762,6 +1764,65 @@ future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_add
     return _features_condvar.wait([this, features = std::move(features), endpoint = std::move(endpoint)] {
         return check_features(get_supported_features(endpoint), features);
     });
+}
+
+void gossiper::register_feature(feature* f) {
+    if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
+        f->_enabled = true;
+    } else {
+        _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
+    }
+}
+
+void gossiper::unregister_feature(feature* f) {
+    auto&& fs = _registered_features[f->name()];
+    auto it = std::find(fs.begin(), fs.end(), f);
+    if (it != fs.end()) {
+        fs.erase(it);
+    }
+}
+
+void gossiper::maybe_enable_features() {
+    if (_registered_features.empty()) {
+        return;
+    }
+
+    auto&& features = get_supported_features();
+    for (auto it = _registered_features.begin(); it != _registered_features.end(); ) {
+        if (features.find(it->first) != features.end()) {
+            for (auto&& f : it->second) {
+                f->_enabled = true;
+            }
+            it = _registered_features.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+feature::feature(sstring name, bool enabled)
+        : _name(name)
+        , _enabled(enabled) {
+    if (!_enabled) {
+        get_local_gossiper().register_feature(this);
+    }
+}
+
+feature::~feature() {
+    if (!_enabled) {
+        get_local_gossiper().unregister_feature(this);
+    }
+}
+
+feature& feature::operator=(feature other) {
+    _name = other._name;
+    if (_enabled && !other._enabled) {
+        get_local_gossiper().register_feature(this);
+    } else if (!_enabled && other._enabled) {
+        get_local_gossiper().unregister_feature(this);
+    }
+    _enabled = other._enabled;
+    return *this;
 }
 
 } // namespace gms
