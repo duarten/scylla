@@ -48,6 +48,7 @@
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
+#include "query-result-reader.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -281,9 +282,25 @@ public:
     }
 
     void multiget_slice(tcxx::function<void(std::map<std::string, std::vector<ColumnOrSuperColumn> >  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::vector<std::string> & keys, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        std::map<std::string, std::vector<ColumnOrSuperColumn> >  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (!column_parent.super_column.empty()) {
+                fail(unimplemented::cause::SUPER);
+            }
+            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
+            auto cmd = slice_pred_to_read_cmd(*schema, predicate);
+            auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
+            return service::get_local_storage_proxy().query(
+                    schema,
+                    cmd,
+                    make_partition_ranges(*schema, keys),
+                    cl_from_thrift(consistency_level)).then([schema, cmd, cell_limit](auto result) {
+                return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
+                    column_aggregator aggregator(*schema, cmd->slice, cell_limit);
+                    v.consume(cmd->slice, aggregator);
+                    return aggregator.release();
+                });
+            });
+        });
     }
 
     void multiget_count(tcxx::function<void(std::map<std::string, int32_t>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::vector<std::string> & keys, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
@@ -1107,6 +1124,7 @@ private:
         if (is_dynamic(s)) {
             opts.set(query::partition_slice::option::send_clustering_key);
         }
+        opts.set(query::partition_slice::option::send_partition_key);
         return opts;
     }
     static lw_shared_ptr<query::read_command> slice_pred_to_read_cmd(const schema& s, const SlicePredicate& predicate) {
@@ -1159,6 +1177,103 @@ private:
                 nullptr, cql_serialization_format::internal(), per_partition_row_limit);
         return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice));
     }
+    static ColumnParent column_path_to_column_parent(const ColumnPath& column_path) {
+        ColumnParent ret;
+        ret.__set_column_family(column_path.column_family);
+        if (column_path.__isset.super_column) {
+            ret.__set_super_column(column_path.super_column);
+        }
+        return ret;
+    }
+    static SlicePredicate column_path_to_slice_predicate(const ColumnPath& column_path) {
+        SlicePredicate ret;
+        if (column_path.__isset.column) {
+            ret.__set_column_names({column_path.column});
+        }
+        return ret;
+    }
+    static std::vector<query::partition_range> make_partition_ranges(const schema& s, const std::vector<std::string>& keys) {
+        std::vector<query::partition_range> ranges;
+        for (auto&& key : keys) {
+            auto pk = key_from_thrift(s, to_bytes(key));
+            auto dk = dht::global_partitioner().decorate_key(s, pk);
+            ranges.emplace_back(query::partition_range::make_singular(std::move(dk)));
+        }
+        return ranges;
+    }
+    static Column make_column(const bytes_view& col, const query::result_atomic_cell_view& cell) {
+        Column ret;
+        ret.__set_name(bytes_to_string(col));
+        ret.__set_value(bytes_to_string(cell.value()));
+        ret.__set_timestamp(cell.timestamp());
+        if (cell.ttl()) {
+            ret.__set_ttl(cell.ttl()->count());
+        }
+        return ret;
+    }
+    static ColumnOrSuperColumn column_to_column_or_supercolumn(Column&& col) {
+        ColumnOrSuperColumn ret;
+        ret.__set_column(std::move(col));
+        return ret;
+    }
+    static ColumnOrSuperColumn make_column_or_supercolumn(const bytes_view& col, const query::result_atomic_cell_view& cell) {
+        return column_to_column_or_supercolumn(make_column(col, cell));
+    }
+    static std::string partition_key_to_string(const schema& s, const partition_key& key) {
+        return bytes_to_string(to_legacy(*s.partition_key_type(), key));
+    }
+    template<typename Aggregator>
+    class column_visitor : public Aggregator {
+        const schema& _s;
+        const query::partition_slice& _slice;
+        uint32_t _cell_limit;
+        std::map<std::string, typename Aggregator::type> _aggregator;
+        typename Aggregator::type* _current_aggregator;
+    public:
+        column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit)
+                : _s(s), _slice(slice), _cell_limit(cell_limit)
+        { }
+        std::map<std::string, typename Aggregator::type>&& release() {
+            return std::move(_aggregator);
+        }
+        void accept_new_partition(const partition_key& key, uint32_t row_count) {
+            _current_aggregator = &_aggregator[partition_key_to_string(_s, key)];
+        }
+        void accept_new_partition(uint32_t row_count) {
+            abort();
+        }
+        void accept_new_row(const clustering_key_prefix& key, const query::result_row_view& static_row, const query::result_row_view& row) {
+            auto cell = row.iterator().next_atomic_cell();
+            if (cell && _cell_limit > 0) {
+                if (_s.thrift().has_compound_comparator()) {
+                    bytes column_name = composite::serialize_value(key.components());
+                    Aggregator::on_column(_current_aggregator, column_name, *cell);
+                } else {
+                    Aggregator::on_column(_current_aggregator, *key.begin(_s), *cell);
+                }
+                _cell_limit -= 1;
+            }
+        }
+        void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
+            auto&& it = row.iterator();
+            for (auto&& id : _slice.regular_columns) {
+                auto cell = it.next_atomic_cell();
+                if (cell && _cell_limit > 0) {
+                    Aggregator::on_column(_current_aggregator, _s.regular_column_at(id).name(), *cell);
+                    _cell_limit -= 1;
+                }
+            }
+        }
+        void accept_partition_end(const query::result_row_view& static_row) {
+        }
+    };
+    struct column_or_supercolumn_builder {
+        using type = std::vector<ColumnOrSuperColumn>;
+        void on_column(std::vector<ColumnOrSuperColumn>* current_cols, const bytes_view& name, const query::result_atomic_cell_view& cell) {
+            current_cols->emplace_back(make_column_or_supercolumn(name, cell));
+        }
+    };
+    using column_aggregator = column_visitor<column_or_supercolumn_builder>;
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
