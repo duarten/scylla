@@ -1711,7 +1711,7 @@ public:
         _static_row_live = false;
         _current_tombstone = { };
         _partition_tombstone = { };
-        _partition_limit = _is_distinct ? 1 : _limit;
+        _partition_limit = _is_distinct ? 1 : std::min(_limit, _slice.partition_row_limit());
         return stop_iteration::no;
     }
 
@@ -1972,7 +1972,7 @@ future<uint32_t> data_query(schema_ptr s, const mutation_source& source, const q
                             const query::partition_slice& slice, uint32_t row_limit, gc_clock::time_point query_time,
                             query::result::builder& builder)
 {
-    if (row_limit == 0) {
+    if (row_limit == 0 || slice.partition_row_limit() == 0) {
         return make_ready_future<uint32_t>(0);
     }
 
@@ -2046,7 +2046,7 @@ mutation_query(schema_ptr s,
                uint32_t row_limit,
                gc_clock::time_point query_time)
 {
-    if (row_limit == 0) {
+    if (row_limit == 0 || slice.partition_row_limit() == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
