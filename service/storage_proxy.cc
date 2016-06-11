@@ -1721,6 +1721,8 @@ class data_read_resolver : public abstract_read_resolver {
 
     size_t _total_live_count = 0;
     uint32_t _max_live_count = 0;
+    uint32_t _per_partition_max_live_count = 0;
+    uint32_t _partition_count = 0;
     std::vector<reply> _data_results;
     std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> _diffs;
 private:
@@ -1857,6 +1859,12 @@ public:
     uint32_t max_live_count() const {
         return _max_live_count;
     }
+    uint32_t per_partition_max_live_count() const {
+        return _per_partition_max_live_count;
+    }
+    uint32_t partition_count() const {
+        return _partition_count;
+    }
     stdx::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit) {
         assert(_data_results.size());
         const auto& s = *schema;
@@ -1913,8 +1921,10 @@ public:
             });
             auto live_row_count = m.live_row_count();
             _total_live_count += live_row_count;
+            _per_partition_max_live_count = std::max(_per_partition_max_live_count, static_cast<uint32_t>(live_row_count));
             return mutation_and_live_row_count { std::move(m), live_row_count };
         });
+        _partition_count = reconciled_partitions.size();
 
         bool has_diff = false;
 
@@ -2127,7 +2137,19 @@ protected:
                     // From that, we can estimate that on this row, for x requested
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
-                    _retry_cmd->row_limit = data_resolver->total_live_count() == 0 ? cmd->row_limit + 1 : ((cmd->row_limit * cmd->row_limit) / data_resolver->total_live_count()) + 1;
+                    auto x = [](uint32_t t, uint32_t l) -> uint32_t {
+                        return std::max(query::max_rows, l == 0 ? t + 1 : ((t * t) / l) + 1);
+                    };
+                    if (data_resolver->per_partition_max_live_count() < _retry_cmd->slice.partition_row_limit()) {
+                        // The number of live rows was bounded by the total row limit.
+                        _retry_cmd->row_limit = x(_retry_cmd->row_limit, data_resolver->total_live_count());
+                    } else {
+                        // The number of live rows may have been bound by the per partition limit.
+                        auto new_limit = x(_retry_cmd->slice.partition_row_limit(), data_resolver->per_partition_max_live_count());
+                        _retry_cmd->slice.set_partition_row_limit(new_limit);
+                        _retry_cmd->row_limit = std::max(_retry_cmd->row_limit,
+                                std::max(query::max_rows, data_resolver->partition_count() * new_limit));
+                    }
                     reconcile(cl, timeout, _retry_cmd);
                 }
             } catch (...) {
