@@ -1660,6 +1660,7 @@ class compact_for_query {
     api::timestamp_type _max_purgeable = api::max_timestamp;
     const query::partition_slice& _slice;
     uint32_t _limit;
+    uint32_t _partition_limit;
     const bool _is_distinct;
 
     Consumer _consumer;
@@ -1693,17 +1694,22 @@ private:
         return t.timestamp < _max_purgeable && t.deletion_time < _gc_before;
     };
 public:
-    compact_for_query(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit, Consumer consumer)
+    compact_for_query(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
+              uint32_t partition_limit, Consumer consumer)
         : _schema(s)
         , _query_time(query_time)
         , _gc_before(query_time - s.gc_grace_seconds())
         , _slice(slice)
         , _limit(limit)
+        , _partition_limit(partition_limit)
         , _is_distinct(_slice.options.contains(query::partition_slice::option::distinct))
         , _consumer(std::move(consumer))
     { }
 
     stop_iteration consume_new_partition(const partition_key& pk) {
+        if (_partition_limit-- == 0) {
+            return stop_iteration::yes;
+        }
         _pk = &pk;
         _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
         _empty_partition = true;
@@ -1969,17 +1975,17 @@ public:
 };
 
 future<uint32_t> data_query(schema_ptr s, const mutation_source& source, const query::partition_range& range,
-                            const query::partition_slice& slice, uint32_t row_limit, gc_clock::time_point query_time,
-                            query::result::builder& builder)
+                            const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
+                            gc_clock::time_point query_time, query::result::builder& builder)
 {
-    if (row_limit == 0 || slice.partition_row_limit() == 0) {
+    if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<uint32_t>(0);
     }
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
     auto qrb = query_result_builder(*s, builder);
-    auto cfq = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, query_time, slice, row_limit, std::move(qrb));
+    auto cfq = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
@@ -2044,16 +2050,17 @@ mutation_query(schema_ptr s,
                const query::partition_range& range,
                const query::partition_slice& slice,
                uint32_t row_limit,
+               uint32_t partition_limit,
                gc_clock::time_point query_time)
 {
-    if (row_limit == 0 || slice.partition_row_limit() == 0) {
+    if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
     auto rrb = reconcilable_result_builder(*s, slice);
-    auto cfq = compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>(*s, query_time, slice, row_limit, std::move(rrb));
+    auto cfq = compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
