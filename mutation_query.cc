@@ -54,9 +54,12 @@ bool reconcilable_result::operator!=(const reconcilable_result& other) const {
 }
 
 query::result
-to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
+to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint32_t max_partitions) {
     query::result::builder builder(slice, query::result_request::only_result);
     for (const partition& p : r.partitions()) {
+        if (!max_partitions--) {
+            break;
+        }
         p.mut().unfreeze(s).query(builder, slice, gc_clock::time_point::min(), slice.partition_row_limit());
     }
     return builder.build();
@@ -68,6 +71,7 @@ querying_reader::querying_reader(schema_ptr s,
         const query::partition_range& range,
         const query::partition_slice& slice,
         uint32_t row_limit,
+        uint32_t partition_limit,
         gc_clock::time_point query_time,
         std::function<void(uint32_t, mutation&&)> consumer)
     : _schema(std::move(s))
@@ -76,11 +80,13 @@ querying_reader::querying_reader(schema_ptr s,
     , _requested_limit(row_limit)
     , _query_time(query_time)
     , _limit(row_limit)
+    , _partition_limit(partition_limit)
     , _source(source)
     , _consumer(std::move(consumer))
 { }
 
 future<> querying_reader::read() {
+    assert (_partition_limit > 0);
     _reader = _source(_schema, _range, query::clustering_key_filtering_context::create(_schema, _slice),
             service::get_local_sstable_query_read_priority());
     return consume(*_reader, [this](mutation&& m) {
@@ -92,6 +98,7 @@ future<> querying_reader::read() {
                                                          _slice.row_ranges(*m.schema(), m.key()),
                                                          is_reversed, limit);
         _limit -= rows_left;
+        _partition_limit -= 1;
 
         if (rows_left || !m.partition().empty()) {
             // NOTE: We must return all columns, regardless of what's in
@@ -103,7 +110,7 @@ future<> querying_reader::read() {
             _consumer(rows_left, std::move(m));
         }
 
-        return _limit ? stop_iteration::no : stop_iteration::yes;
+        return _limit && _partition_limit ? stop_iteration::no : stop_iteration::yes;
     });
 }
 
@@ -117,8 +124,9 @@ public:
         const query::partition_range& range,
         const query::partition_slice& slice,
         uint32_t row_limit,
+        uint32_t partition_limit,
         gc_clock::time_point query_time)
-            : _reader(std::move(s), source, range, slice, row_limit, query_time, [this] (uint32_t live_rows, mutation&& m) {
+            : _reader(std::move(s), source, range, slice, row_limit, partition_limit, query_time, [this] (uint32_t live_rows, mutation&& m) {
                 _result.emplace_back(partition{live_rows, freeze(m)});
                 _total += live_rows;
             })
@@ -139,13 +147,14 @@ mutation_query(schema_ptr s,
                const query::partition_range& range,
                const query::partition_slice& slice,
                uint32_t row_limit,
+               uint32_t partition_limit,
                gc_clock::time_point query_time)
 {
-    if (row_limit == 0) {
+    if (row_limit == 0 || partition_limit == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
-    auto b_ptr = std::make_unique<reconcilable_result_builder>(std::move(s), source, range, slice, row_limit, query_time);
+    auto b_ptr = std::make_unique<reconcilable_result_builder>(std::move(s), source, range, slice, row_limit, partition_limit, query_time);
     auto& b = *b_ptr;
     return b.build().finally([keep = std::move(b_ptr)] {});
 }
