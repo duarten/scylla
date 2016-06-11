@@ -44,6 +44,10 @@
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/indirected.hpp>
+#include <boost/range/adaptor/uniqued.hpp>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -1038,6 +1042,97 @@ private:
         }
         return clustering_key_prefix::from_exploded(legacy_compound_type::select_values(
                     legacy_compound_type::parse(*s.clustering_key_type(), v)));
+    }
+    static query::clustering_range make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
+        using bound = query::clustering_range::bound;
+        stdx::optional<bound> start_bound;
+        if (!start.empty()) {
+            start_bound = bound(make_clustering_prefix(s, to_bytes(start)));
+        }
+        stdx::optional<bound> end_bound;
+        if (!end.empty()) {
+            end_bound = bound(make_clustering_prefix(s, to_bytes(end)));
+        }
+        query::clustering_range range = {std::move(start_bound), std::move(end_bound)};
+        if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(s))) {
+            throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
+        }
+        return range;
+    }
+    static std::pair<schema::const_iterator, schema::const_iterator> make_column_range(const schema& s, const std::string& start, const std::string& end) {
+        auto start_it = start.empty() ? s.regular_begin() : s.regular_lower_bound(to_bytes(start));
+        auto end_it = end.empty() ? s.regular_end() : s.regular_upper_bound(to_bytes(end));
+        if (start_it > end_it) {
+            throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
+        }
+        return std::make_pair(std::move(start_it), std::move(end_it));
+    }
+    static void add_columns(auto&& beg, auto&& end, std::vector<column_id>& out, uint32_t count, bool reversed) {
+         while (beg != end && count-- > 0) {
+            auto&& c = reversed ? *--end : *beg++;
+            if (c.is_atomic()) {
+                out.emplace_back(c.id);
+            }
+        }
+    }
+    static bool is_dynamic(const schema& s) {
+        return s.clustering_key_size() > 0;
+    }
+    static query::partition_slice::option_set query_opts(const schema& s) {
+        query::partition_slice::option_set opts;
+        opts.set(query::partition_slice::option::send_timestamp);
+        opts.set(query::partition_slice::option::send_ttl);
+        if (is_dynamic(s)) {
+            opts.set(query::partition_slice::option::send_clustering_key);
+        }
+        return opts;
+    }
+    static lw_shared_ptr<query::read_command> slice_pred_to_read_cmd(const schema& s, const SlicePredicate& predicate) {
+        auto opts = query_opts(s);
+        std::vector<query::clustering_range> clustering_ranges;
+        std::vector<column_id> regular_columns;
+        uint32_t per_partition_row_limit = query::max_rows;
+        if (predicate.__isset.column_names) {
+            std::vector<std::string> unique_column_names;
+            boost::copy(predicate.column_names | boost::adaptors::uniqued, std::back_inserter(unique_column_names));
+            if (is_dynamic(s)) {
+                for (auto&& name : unique_column_names) {
+                    auto ckey = make_clustering_prefix(s, to_bytes(name));
+                    clustering_ranges.emplace_back(query::clustering_range::make_singular(std::move(ckey)));
+                }
+                regular_columns.emplace_back(s.regular_begin()->id);
+            } else {
+                clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto&& defs = unique_column_names
+                    | boost::adaptors::transformed([&s](auto&& name) { return s.get_column_definition(to_bytes(name)); })
+                    | boost::adaptors::filtered([](auto* def) { return def; });
+                add_columns(boost::make_indirect_iterator(defs.begin()), boost::make_indirect_iterator(defs.end()),
+                        regular_columns, query::max_rows, false);
+            }
+        } else if (predicate.__isset.slice_range) {
+            auto range = predicate.slice_range;
+            if (range.count < 0) {
+                throw make_exception<InvalidRequestException>("SliceRange requires non-negative count");
+            }
+            if (range.reversed) {
+                std::swap(range.start, range.finish);
+                opts.set(query::partition_slice::option::reversed);
+            }
+            per_partition_row_limit = static_cast<uint32_t>(range.count);
+            if (is_dynamic(s)) {
+                clustering_ranges.emplace_back(make_clustering_range(s, range.start, range.finish));
+                regular_columns.emplace_back(s.regular_begin()->id);
+            } else {
+                clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto r = make_column_range(s, range.start, range.finish);
+                add_columns(r.first, r.second, regular_columns, per_partition_row_limit, range.reversed);
+            }
+        } else {
+            throw make_exception<InvalidRequestException>("SlicePredicate column_names and slice_range may not both be null");
+        }
+        auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts,
+                nullptr, cql_serialization_format::internal(), per_partition_row_limit);
+        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice));
     }
 };
 
