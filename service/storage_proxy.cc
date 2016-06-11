@@ -1721,6 +1721,8 @@ class data_read_resolver : public abstract_read_resolver {
 
     size_t _total_live_count = 0;
     uint32_t _max_live_count = 0;
+    uint32_t _per_partition_max_live_count = 0;
+    uint32_t _partition_count = 0;
     std::vector<reply> _data_results;
     std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> _diffs;
 private:
@@ -1776,9 +1778,101 @@ private:
         return {};
     }
 
+    static row_address get_last_reconciled_row(
+            const schema& s,
+            const mutation_and_live_row_count& m_a_rc,
+            const query::read_command& cmd,
+            uint32_t limit,
+            bool is_reversed) {
+        const auto& m = m_a_rc.mut;
+        auto mp = m.partition();
+        auto&& ranges = cmd.slice.row_ranges(s, m.key());
+        auto rc = mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
+
+        assert(rc == limit);
+        stdx::optional<clustering_key> ck;
+        if (!mp.clustered_rows().empty()) {
+            if (is_reversed) {
+                ck = mp.clustered_rows().begin()->key();
+            } else {
+                ck = mp.clustered_rows().rbegin()->key();
+            }
+        }
+        return std::make_pair(m.decorated_key(), ck);
+    }
+
+    static bool is_missing_rows(
+            const row_address& last_reconciled_row,
+            const row_address& replica_last_row,
+            const clustering_key::less_compare& ck_compare,
+            bool is_reversed) {
+        if (!last_reconciled_row.second) {
+            return false;
+        }
+        if (!replica_last_row.second) {
+            return true;
+        }
+        auto&& replica_ck = *replica_last_row.second;
+        if (is_reversed) {
+            return ck_compare(*last_reconciled_row.second, replica_ck);
+        } else {
+            return ck_compare(replica_ck, *last_reconciled_row.second);
+        }
+    }
+
+    static bool got_incomplete_information_in_partition(
+            const schema& s,
+            const row_address& last_reconciled_row,
+            const std::vector<version>& versions,
+            uint32_t limit,
+            bool is_reversed) {
+        clustering_key::less_compare ck_compare(s);
+        for (auto&& v : versions) {
+            if (v.par.row_count() < limit) {
+                continue;
+            }
+            auto replica_last_row = get_last_row(s, v.par, is_reversed);
+            if (is_missing_rows(last_reconciled_row, replica_last_row, ck_compare, is_reversed)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool got_incomplete_information_across_partitions(
+            const schema& s,
+            const row_address& last_reconciled_row,
+            const std::vector<std::vector<version>>& versions,
+            uint32_t limit,
+            bool is_reversed) {
+        clustering_key::less_compare ck_compare(s);
+        auto num_replicas = versions[0].size();
+        for (uint32_t i = 0; i < num_replicas; ++i) {
+            auto replica_last_row = get_last_row(s, is_reversed, limit, versions, i);
+            if (!replica_last_row) {
+                continue;
+            }
+            auto pk_compare = replica_last_row->first.tri_compare(s, last_reconciled_row.first);
+            if (pk_compare < 0) {
+                return true;
+            } else if (pk_compare > 0) {
+                continue;
+            }
+            if (is_missing_rows(last_reconciled_row, *replica_last_row, ck_compare, is_reversed)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     template<typename ReconciledPartitions>
-    bool got_incomplete_information(const schema& s, const query::read_command& cmd, uint32_t original_row_limit,
-                                    const ReconciledPartitions& rp, const std::vector<std::vector<version>>& versions) const {
+    bool got_incomplete_information(
+            const schema& s,
+            const query::read_command& cmd,
+            uint32_t original_row_limit,
+            uint32_t original_per_partition_limit,
+            const ReconciledPartitions& rp,
+            const std::vector<std::vector<version>>& versions) const {
         // We need to check whether the reconciled result contains all information from all available
         // replicas. It is possible that some of the nodes have returned less rows (because the limit
         // was set and they had some tombstones missing) than the others. In such cases we cannot just
@@ -1791,61 +1885,23 @@ private:
         // asked for (if a replica returned less rows it means it returned everything it has).
         auto is_reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
 
-        auto last_row = [&] {
-            auto limit = original_row_limit;
-            for (auto&& m_a_rc : rp) {
-                auto row_count = m_a_rc.live_row_count;
-                if (row_count < limit) {
-                    limit -= row_count;
-                    continue;
-                }
-                const auto& m = m_a_rc.mut;
-                auto mp = m.partition();
-                auto&& ranges = cmd.slice.row_ranges(s, m.key());
-                auto rc = mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
-
-                assert(rc == limit);
-                stdx::optional<clustering_key> ck;
-                if (!mp.clustered_rows().empty()) {
-                    if (is_reversed) {
-                        ck = mp.clustered_rows().begin()->key();
-                    } else {
-                        ck = mp.clustered_rows().rbegin()->key();
+        auto limit = original_row_limit;
+        auto pv = versions.rbegin();
+        for (auto&& m_a_rc : rp) {
+            auto row_count = m_a_rc.live_row_count;
+            if (row_count < limit) {
+                limit -= row_count;
+                if (original_per_partition_limit != query::max_rows) {
+                    auto &&last_row = get_last_reconciled_row(s, m_a_rc, cmd, original_per_partition_limit, is_reversed);
+                    if (got_incomplete_information_in_partition(s, last_row, *pv, original_per_partition_limit, is_reversed)) {
+                        return true;
                     }
                 }
-                return std::make_pair(m.decorated_key(), ck);
-            }
-            abort();
-        }();
-
-        clustering_key::less_compare ck_compare(s);
-        auto num_replicas = versions[0].size();
-        for (uint32_t i = 0; i < num_replicas; ++i) {
-            auto replica_last_row = get_last_row(s, is_reversed, original_row_limit, versions, i);
-            if (!replica_last_row) {
-                continue;
-            }
-            auto pk_compare = replica_last_row->first.tri_compare(s, last_row.first);
-            if (pk_compare < 0) {
-                return true;
-            } else if (pk_compare > 0) {
-                continue;
-            }
-            if (!last_row.second) {
-                continue;
-            } else if (!replica_last_row->second) {
-                return true;
-            }
-            auto&& replica_ck = *replica_last_row->second;
-            if (is_reversed) {
-                if (ck_compare(*last_row.second, replica_ck)) {
-                    return true;
-                }
             } else {
-                if (ck_compare(replica_ck, *last_row.second)) {
-                    return true;
-                }
+                auto &&last_row = get_last_reconciled_row(s, m_a_rc, cmd, limit, is_reversed);
+                return got_incomplete_information_across_partitions(s, last_row, versions, original_row_limit, is_reversed);
             }
+            ++pv;
         }
         return false;
     }
@@ -1856,6 +1912,9 @@ public:
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
         if (!_timedout) {
             _max_live_count = std::max(result->row_count(), _max_live_count);
+            for (auto&& p : result->partitions()) {
+                _per_partition_max_live_count = std::max(p.row_count(), _per_partition_max_live_count);
+            }
             _data_results.emplace_back(std::move(from), std::move(result));
             if (_data_results.size() == _targets_count) {
                 _timeout.cancel();
@@ -1866,7 +1925,13 @@ public:
     uint32_t max_live_count() const {
         return _max_live_count;
     }
-    stdx::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit) {
+    uint32_t per_partition_max_live_count() const {
+        return _per_partition_max_live_count;
+    }
+    uint32_t partition_count() const {
+        return _partition_count;
+    }
+    stdx::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit) {
         assert(_data_results.size());
         const auto& s = *schema;
 
@@ -1922,6 +1987,7 @@ public:
             _total_live_count += live_row_count;
             return mutation_and_live_row_count { std::move(m), live_row_count };
         });
+        _partition_count = reconciled_partitions.size();
 
         bool has_diff = false;
 
@@ -1952,7 +2018,7 @@ public:
         }
 
         if (has_diff) { // || _per partition max live >= per partition limit
-            if (_total_live_count >= original_row_limit && got_incomplete_information(*schema, cmd, original_row_limit,
+            if (_total_live_count >= original_row_limit && got_incomplete_information(*schema, cmd, original_row_limit, original_per_partition_limit,
                                                                                       reconciled_partitions | boost::adaptors::reversed, versions)) {
                 return {};
             }
@@ -2096,6 +2162,9 @@ protected:
     uint32_t original_row_limit() const {
         return _cmd->row_limit;
     }
+    uint32_t original_per_partition_row_limit() const {
+        return _cmd->slice.partition_row_limit();
+    }
     void reconcile(db::consistency_level cl, std::chrono::steady_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
         auto exec = shared_from_this();
@@ -2105,7 +2174,7 @@ protected:
         data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
             try {
                 f.get();
-                auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit()); // reconciliation happens here
+                auto rr_opt = data_resolver->resolve(_schema, *cmd, original_row_limit(), original_per_partition_row_limit()); // reconciliation happens here
 
                 // We generate a retry if at least one node reply with count live columns but after merge we have less
                 // than the total number of column we are interested in (which may be < count on a retry).
@@ -2134,7 +2203,19 @@ protected:
                     // From that, we can estimate that on this row, for x requested
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
-                    _retry_cmd->row_limit = data_resolver->total_live_count() == 0 ? _retry_cmd->row_limit + 1 : ((_retry_cmd->row_limit * _retry_cmd->row_limit) / data_resolver->total_live_count()) + 1;
+                    auto x = [](uint32_t t, uint32_t l) -> uint32_t {
+                        return std::max(query::max_rows, l == 0 ? t + 1 : ((t * t) / l) + 1);
+                    };
+                    if (data_resolver->per_partition_max_live_count() < _retry_cmd->slice.partition_row_limit()) {
+                        // The number of live rows was bounded by the total row limit.
+                        _retry_cmd->row_limit = x(_retry_cmd->row_limit, data_resolver->total_live_count());
+                    } else {
+                        // The number of live rows may have been bound by the per partition limit.
+                        auto new_limit = x(_retry_cmd->slice.partition_row_limit(), data_resolver->per_partition_max_live_count());
+                        _retry_cmd->slice.set_partition_row_limit(new_limit);
+                        _retry_cmd->row_limit = std::max(_retry_cmd->row_limit,
+                                std::max(query::max_rows, data_resolver->partition_count() * new_limit));
+                    }
                     reconcile(cl, timeout, _retry_cmd);
                 }
             } catch (...) {

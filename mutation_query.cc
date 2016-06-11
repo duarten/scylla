@@ -57,7 +57,7 @@ query::result
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
     query::result::builder builder(slice, query::result_request::only_result);
     for (const partition& p : r.partitions()) {
-        p.mut().unfreeze(s).query(builder, slice, gc_clock::time_point::min(), query::max_rows);
+        p.mut().unfreeze(s).query(builder, slice, gc_clock::time_point::min(), slice.partition_row_limit());
     }
     return builder.build();
 }
@@ -87,7 +87,7 @@ future<> querying_reader::read() {
         // FIXME: Make data sources respect row_ranges so that we don't have to filter them out here.
         auto is_distinct = _slice.options.contains(query::partition_slice::option::distinct);
         auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
-        auto limit = !is_distinct ? _limit : 1;
+        auto limit = !is_distinct ? std::min(_limit, _slice.partition_row_limit()) : 1;
         auto rows_left = m.partition().compact_for_query(*m.schema(), _query_time,
                                                          _slice.row_ranges(*m.schema(), m.key()),
                                                          is_reversed, limit);
