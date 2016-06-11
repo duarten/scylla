@@ -94,7 +94,7 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
-query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&);
+query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint32_t partition_limit = query::max_partitions);
 
 // Performs a query on given data source returning data in reconcilable form.
 //
@@ -113,6 +113,7 @@ future<reconcilable_result> mutation_query(
     const query::partition_range& range,
     const query::partition_slice& slice,
     uint32_t row_limit,
+    uint32_t partition_limit,
     gc_clock::time_point query_time);
 
 
@@ -123,6 +124,7 @@ class querying_reader {
     uint32_t _requested_limit;
     gc_clock::time_point _query_time;
     uint32_t _limit;
+    uint32_t _partition_limit;
     const mutation_source& _source;
     std::function<void(uint32_t, mutation&&)> _consumer;
     std::experimental::optional<mutation_reader> _reader;
@@ -132,6 +134,7 @@ public:
                     const query::partition_range& range,
                     const query::partition_slice& slice,
                     uint32_t row_limit,
+                    uint32_t partition_limit,
                     gc_clock::time_point query_time,
                     std::function<void(uint32_t, mutation&&)> consumer);
 
