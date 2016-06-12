@@ -48,6 +48,7 @@
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/adaptor/uniqued.hpp>
+#include <boost/range/adaptor/sliced.hpp>
 #include "query-result-reader.hh"
 
 using namespace ::apache::thrift;
@@ -493,9 +494,65 @@ public:
     }
 
     void get_multi_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const MultiSliceRequest& request) {
-        std::vector<ColumnOrSuperColumn>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+       with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (!request.__isset.key) {
+                throw make_exception<InvalidRequestException>("Key may not be empty");
+            }
+            if (!request.__isset.column_parent || request.column_parent.column_family.empty()) {
+                throw make_exception<InvalidRequestException>("non-empty table is required");
+            }
+            if (!request.column_parent.super_column.empty()) {
+                throw make_exception<InvalidRequestException>("get_multi_slice does not support super columns");
+            }
+            auto schema = lookup_schema(_db.local(), current_keyspace(), request.column_parent.column_family);
+            auto& s = *schema;
+            auto pk = key_from_thrift(s, to_bytes(request.key));
+            auto dk = dht::global_partitioner().decorate_key(s, pk);
+            std::vector<column_id> regular_columns;
+            std::vector<query::clustering_range> clustering_ranges;
+            auto opts = query_opts(s);
+            uint32_t row_limit;
+            if (is_dynamic(s)) {
+                row_limit = request.count;
+                clustering_ranges = make_non_overlapping_ranges<clustering_key_prefix>(std::move(request.column_slices), [&s](auto&& cslice) {
+                    return make_clustering_range(s, cslice.start, cslice.finish);
+                }, clustering_key_prefix::prefix_equal_tri_compare(s), request.reversed);
+                regular_columns.emplace_back(s.regular_begin()->id);
+                if (request.reversed) {
+                    opts.set(query::partition_slice::option::reversed);
+                }
+            } else {
+                row_limit = query::max_rows;
+                clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto ranges = make_non_overlapping_ranges<bytes>(std::move(request.column_slices), [](auto&& cslice) {
+                    return make_range(cslice.start, cslice.finish);
+                }, [](auto&& s1, auto&& s2) { return s1.compare(s2); }, request.reversed);
+                auto on_range = [&](auto&& range) {
+                    auto start = range.start() ? s.regular_lower_bound(range.start()->value()) : s.regular_begin();
+                    auto end  = range.end() ? s.regular_upper_bound(range.end()->value()) : s.regular_end();
+                    add_columns(start, end, regular_columns, request.count - regular_columns.size(), request.reversed);
+                };
+                if (request.reversed) {
+                    std::for_each(ranges.rbegin(), ranges.rend(), on_range);
+                } else {
+                    std::for_each(ranges.begin(), ranges.end(), on_range);
+                }
+            }
+            auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts, nullptr);
+            auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), row_limit);
+            return service::get_local_storage_proxy().query(
+                    schema,
+                    cmd,
+                    {query::partition_range::make_singular(dk)},
+                    cl_from_thrift(request.consistency_level)).then([schema, cmd](auto result) {
+                return query::result_view::do_with(*result, [schema, cmd](query::result_view v) {
+                    column_aggregator aggregator(*schema, cmd->slice);
+                    v.consume(cmd->slice, aggregator);
+                    auto cols = aggregator.release();
+                    return !cols.empty() ? std::move(cols.begin()->second) : std::vector<ColumnOrSuperColumn>();
+                });
+            });
+        });
     }
 
     void describe_schema_versions(tcxx::function<void(std::map<std::string, std::vector<std::string> >  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
@@ -1127,17 +1184,22 @@ private:
         return clustering_key_prefix::from_exploded(legacy_compound_type::select_values(
                     legacy_compound_type::parse(*s.clustering_key_type(), v)));
     }
-    static query::clustering_range make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
-        using bound = query::clustering_range::bound;
+    static range<bytes> make_range(const std::string& start, const std::string& end) {
+        using bound = range<bytes>::bound;
         stdx::optional<bound> start_bound;
         if (!start.empty()) {
-            start_bound = bound(make_clustering_prefix(s, to_bytes(start)));
+            start_bound = bound(to_bytes(start));
         }
         stdx::optional<bound> end_bound;
         if (!end.empty()) {
-            end_bound = bound(make_clustering_prefix(s, to_bytes(end)));
+            end_bound = bound(to_bytes(end));
         }
-        query::clustering_range range = {std::move(start_bound), std::move(end_bound)};
+        return {std::move(start_bound), std::move(end_bound)};
+    }
+    static query::clustering_range make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
+        auto range = make_range(start, end).transform<clustering_key_prefix>([s](auto&& v) {
+            return make_clustering_prefix(s, std::forward<decltype(v)>(v));
+        });
         if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(s))) {
             throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
         }
@@ -1395,6 +1457,67 @@ private:
             return ks;
         });
         return ret;
+    }
+    template<typename RangeType, typename Comparator>
+    static std::vector<range<RangeType>> normalize(const Comparator& less_cmp, std::vector<range<RangeType>> ranges) {
+        auto size = ranges.size();
+        if (size <= 1) {
+            return ranges;
+        }
+
+        std::sort(ranges.begin(), ranges.end(), [&](auto&& r1, auto&& r2) {
+            if (!r1.start() && !r2.start()) {
+                return false;
+            }
+            if (!r1.start()) {
+                return true;
+            }
+            if (!r2.start()) {
+                return false;
+            }
+            return less_cmp(r1.start()->value(), r2.start()->value()) < 0;
+        });
+
+        std::vector<range<RangeType>> normalized_ranges;
+        normalized_ranges.reserve(size);
+
+        auto&& last = ranges[0];
+        for (auto&& r : ranges | boost::adaptors::sliced(1, ranges.size())) {
+            bool includes_end = !last.end() || (r.end() && last.contains(r.end()->value(), less_cmp));
+            if (includes_end) {
+                continue; // last.start <= r.start <= r.end <= last.end
+            }
+            bool includes_start = !last.start() || (r.start() && last.contains(r.start()->value(), less_cmp));
+            if (includes_start) {
+                last = range<RangeType>(last.start(), r.end());
+            } else {
+                std::swap(last, r);
+                normalized_ranges.emplace_back(std::move(r));
+            }
+        }
+
+        normalized_ranges.emplace_back(std::move(last));
+        return normalized_ranges;
+    }
+    template<typename RangeType, typename Comparator>
+    static std::vector<range<RangeType>> make_non_overlapping_ranges(
+            std::vector<ColumnSlice> column_slices,
+            const std::function<range<RangeType>(ColumnSlice&&)> mapper,
+            const Comparator& less_cmp,
+            bool reversed) {
+        std::vector<range<RangeType>> ranges;
+        std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
+            auto range = mapper(std::move(cslice));
+            if (!reversed && range.is_wrap_around(less_cmp)) {
+                throw make_exception<InvalidRequestException>("Column slice had start %s greater than finish %s", cslice.start, cslice.finish);
+            } else if (reversed && !range.is_wrap_around(less_cmp)) {
+                throw make_exception<InvalidRequestException>("Reversed column slice had start %s less than finish %s", cslice.start, cslice.finish);
+            } else if (reversed) {
+                range.reverse();
+            }
+            return range;
+        });
+        return normalize(less_cmp, std::move(ranges));
     }
 };
 
