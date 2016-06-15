@@ -2217,6 +2217,7 @@ protected:
                         _retry_cmd->row_limit = std::max(_retry_cmd->row_limit,
                                 std::max(query::max_rows, data_resolver->partition_count() * new_limit));
                     }
+                    logger.trace("Retrying query with command {} (original is {})", _retry_cmd, _cmd);
                     reconcile(cl, timeout, _retry_cmd);
                 }
             } catch (...) {
