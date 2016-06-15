@@ -1761,23 +1761,24 @@ private:
         return {p.mut().decorated_key(s), glr.last_clustering_key()};
     }
 
-    std::vector<row_address> get_last_rows(schema_ptr schema, const query::read_command& cmd) {
-        auto is_reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
-        std::vector<row_address> vec;
-        vec.reserve(_data_results.size());
-        for (auto& reply : _data_results) {
-            const auto& result = *reply.result;
-            if (result.row_count() < cmd.row_limit) {
-                continue;
+    static stdx::optional<row_address> get_last_row(
+            const schema& s,
+            bool is_reversed,
+            uint32_t row_limit,
+            std::vector<std::vector<version>> versions,
+            uint32_t replica) {
+        uint32_t row_count = 0;
+        for (auto&& pv : versions | boost::adaptors::reversed) {
+            if (row_count += pv[replica].par.row_count() >= row_limit) {
+                return get_last_row(s, pv[replica].par, is_reversed);
             }
-            assert(!result.partitions().empty());
-            vec.emplace_back(get_last_row(*schema, result.partitions().back(), is_reversed));
         }
-        return vec;
+        return {};
     }
 
     template<typename ReconciledPartitions>
-    bool got_incomplete_information(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit, const ReconciledPartitions& rp, const std::vector<row_address>& rows) const {
+    bool got_incomplete_information(const schema& s, const query::read_command& cmd, uint32_t original_row_limit,
+                                    const ReconciledPartitions& rp, const std::vector<std::vector<version>>& versions) const {
         // We need to check whether the reconciled result contains all information from all available
         // replicas. It is possible that some of the nodes have returned less rows (because the limit
         // was set and they had some tombstones missing) than the others. In such cases we cannot just
@@ -1800,8 +1801,8 @@ private:
                 }
                 const auto& m = m_a_rc.mut;
                 auto mp = m.partition();
-                auto&& ranges = cmd.slice.row_ranges(*schema, m.key());
-                auto rc = mp.compact_for_query(*schema, cmd.timestamp, ranges, is_reversed, limit);
+                auto&& ranges = cmd.slice.row_ranges(s, m.key());
+                auto rc = mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
 
                 assert(rc == limit);
                 stdx::optional<clustering_key> ck;
@@ -1817,9 +1818,14 @@ private:
             abort();
         }();
 
-        clustering_key::less_compare ck_compare(*schema);
-        for (auto&& row : rows) {
-            auto pk_compare = row.first.tri_compare(*schema, last_row.first);
+        clustering_key::less_compare ck_compare(s);
+        auto num_replicas = versions[0].size();
+        for (uint32_t i = 0; i < num_replicas; ++i) {
+            auto replica_last_row = get_last_row(s, is_reversed, original_row_limit, versions, i);
+            if (!replica_last_row) {
+                continue;
+            }
+            auto pk_compare = replica_last_row->first.tri_compare(s, last_row.first);
             if (pk_compare < 0) {
                 return true;
             } else if (pk_compare > 0) {
@@ -1827,15 +1833,16 @@ private:
             }
             if (!last_row.second) {
                 continue;
-            } else if (!row.second) {
+            } else if (!replica_last_row->second) {
                 return true;
             }
+            auto&& replica_ck = *replica_last_row->second;
             if (is_reversed) {
-                if (ck_compare(*last_row.second, *row.second)) {
+                if (ck_compare(*last_row.second, replica_ck)) {
                     return true;
                 }
             } else {
-                if (ck_compare(*row.second, *last_row.second)) {
+                if (ck_compare(replica_ck, *last_row.second)) {
                     return true;
                 }
             }
@@ -1862,8 +1869,6 @@ public:
     stdx::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit) {
         assert(_data_results.size());
         const auto& s = *schema;
-
-        auto last_rows = get_last_rows(schema, cmd);
 
         // return true if lh > rh
         auto cmp = [&s](reply& lh, reply& rh) {
@@ -1947,8 +1952,8 @@ public:
         }
 
         if (has_diff) { // || _per partition max live >= per partition limit
-            if (_total_live_count >= original_row_limit && got_incomplete_information(schema, cmd, original_row_limit,
-                                                                                      reconciled_partitions | boost::adaptors::reversed, last_rows)) {
+            if (_total_live_count >= original_row_limit && got_incomplete_information(*schema, cmd, original_row_limit,
+                                                                                      reconciled_partitions | boost::adaptors::reversed, versions)) {
                 return {};
             }
             // filter out partitions with empty diffs
