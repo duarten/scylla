@@ -2127,7 +2127,7 @@ protected:
                     // From that, we can estimate that on this row, for x requested
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
-                    _retry_cmd->row_limit = data_resolver->total_live_count() == 0 ? cmd->row_limit + 1 : ((cmd->row_limit * cmd->row_limit) / data_resolver->total_live_count()) + 1;
+                    _retry_cmd->row_limit = data_resolver->total_live_count() == 0 ? _retry_cmd->row_limit + 1 : ((_retry_cmd->row_limit * _retry_cmd->row_limit) / data_resolver->total_live_count()) + 1;
                     reconcile(cl, timeout, _retry_cmd);
                 }
             } catch (...) {
