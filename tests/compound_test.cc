@@ -197,6 +197,29 @@ BOOST_AUTO_TEST_CASE(test_conversion_to_legacy_form) {
         bytes({'\x00', '\x03', 'e', 'l', '1', '\x00', '\x00', '\x00', '\x00'}));
 }
 
+BOOST_AUTO_TEST_CASE(test_conversion_from_legacy_form) {
+    compound_type<allow_prefixes::no> singular({bytes_type});
+    using components = std::vector<legacy_compound_type::component>;
+    BOOST_REQUIRE_EQUAL(legacy_compound_type::parse(singular, bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'})),
+                        components({std::make_pair(bytes("el1"), legacy_compound_type::eoc::normal)}));
+    BOOST_REQUIRE_EQUAL(legacy_compound_type::parse(singular, bytes({'\x00', '\x00', '\x01'})),
+                        components({std::make_pair(bytes(""), legacy_compound_type::eoc::end_of_range)}));
+    BOOST_REQUIRE_EQUAL(legacy_compound_type::parse(singular, bytes({'\x00', '\x05', 'e', 'l', 'e', 'm', '1', '\xff'})),
+                        components({std::make_pair(bytes("elem1"), legacy_compound_type::eoc::exclusive)}));
+    BOOST_REQUIRE_EQUAL(legacy_compound_type::parse(singular, bytes({'\x00', '\x03', 'e', 'l', '1', '\x05'})),
+                        components({std::make_pair(bytes("el1"), legacy_compound_type::eoc::other)}));
+
+    compound_type<allow_prefixes::no> two_components({bytes_type, bytes_type});
+
+    BOOST_REQUIRE_EQUAL(legacy_compound_type::parse(two_components, bytes({'\x00', '\x03', 'e', 'l', '1', '\x00', '\x00', '\x05', 'e', 'l', 'e', 'm', '2', '\x01'})),
+                        components({std::make_pair(bytes("el1"), legacy_compound_type::eoc::normal),
+                         std::make_pair(bytes("elem2"), legacy_compound_type::eoc::end_of_range)}));
+
+    BOOST_REQUIRE_EQUAL(legacy_compound_type::parse(two_components, bytes({'\x00', '\x03', 'e', 'l', '1', '\xff', '\x00', '\x00', '\x12'})),
+                        components({std::make_pair(bytes("el1"), legacy_compound_type::eoc::exclusive),
+                         std::make_pair(bytes(""), legacy_compound_type::eoc::other)}));
+}
+
 BOOST_AUTO_TEST_CASE(test_legacy_ordering_of_singular) {
     compound_type<allow_prefixes::no> t({bytes_type});
 
