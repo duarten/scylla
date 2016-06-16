@@ -170,6 +170,109 @@ public:
     }
 };
 
+class legacy_compound_type {
+    legacy_compound_type()
+    { }
+public:
+    /*
+     * The 'end-of-component' byte should always be 0 for actual column name.
+     * However, it can set to 1 for query bounds. This allows to query for the
+     * equivalent of 'give me the full range'. That is, if a slice query is:
+     *   start = <3><"foo".getBytes()><0>
+     *   end   = <3><"foo".getBytes()><1>
+     * then we'll return *all* the columns whose first component is "foo".
+     * If for a component, the 'end-of-component' is != 0, there should not be any
+     * following component. The end-of-component can also be -1 to allow
+     * non-inclusive query. For instance:
+     *   start = <3><"foo".getBytes()><-1>
+     * allows to query everything that is greater than <3><"foo".getBytes()>, but
+     * not <3><"foo".getBytes()> itself.
+     */
+    enum class eoc { normal, end_of_range, exclusive, other };
+
+    using component = std::pair<bytes, eoc>;
+    using size_type = uint16_t;
+    using eoc_type = int8_t;
+
+    class iterator : public std::iterator<std::input_iterator_tag, std::pair<bytes_view, eoc>> {
+        bytes_view _v;
+        value_type _current;
+        eoc to_eoc(int8_t eoc_byte) {
+            switch (eoc_byte) {
+            case 0: return eoc::normal;
+            case 1: return eoc::end_of_range;
+            case -1: return eoc::exclusive;
+            default: return eoc::other;
+            }
+        }
+        void read_current() {
+            size_type len;
+            {
+                if (_v.empty()) {
+                    _v = bytes_view(nullptr, 0);
+                    return;
+                }
+                len = read_simple<size_type>(_v);
+                if (_v.size() < len) {
+                    throw marshal_exception();
+                }
+            }
+            auto value = bytes_view(_v.begin(), len);
+            _v.remove_prefix(len);
+            _current = std::make_pair(value, to_eoc(read_simple<eoc_type>(_v)));
+        }
+    public:
+        struct end_iterator_tag {};
+        iterator(const bytes_view& v) : _v(v) {
+            read_current();
+        }
+        iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
+        iterator& operator++() {
+            read_current();
+            return *this;
+        }
+        iterator operator++(int) {
+            iterator i(*this);
+            ++(*this);
+            return i;
+        }
+        const value_type& operator*() const { return _current; }
+        const value_type* operator->() const { return &_current; }
+        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
+        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
+    };
+    static iterator begin(const bytes_view& v) {
+        return iterator(v);
+    }
+    static iterator end(const bytes_view& v) {
+        return iterator(iterator::end_iterator_tag(), v);
+    }
+    static boost::iterator_range<iterator> components(const bytes_view& v) {
+        return { begin(v), end(v) };
+    }
+    template <typename CompoundType>
+    static std::vector<component> parse(CompoundType& type, bytes_view v) {
+        std::vector<component> result;
+        result.reserve(type.types().size());
+        std::transform(begin(v), end(v), std::back_inserter(result), [](auto&& p) {
+            return component(bytes(p.first.begin(), p.first.end()), p.second);
+        });
+        return result;
+    }
+    static std::vector<bytes> select_values(std::vector<component>&& components) {
+        std::vector<bytes> values;
+        values.reserve(components.size());
+        std::transform(components.begin(), components.end(), std::back_inserter(values), [](auto&& c) {
+            return std::move(c.first);
+        });
+        return values;
+    }
+
+    friend inline std::ostream& operator<<(std::ostream& os, const component& c) {
+        return os << "{value=" << c.first << "; eoc=" << static_cast<std::underlying_type<eoc>::type>(c.second) << "}";
+    }
+};
+
 // Converts compound_type<> representation to legacy representation
 // @packed is assumed to be serialized using supplied @type.
 template <typename CompoundType>
