@@ -993,10 +993,11 @@ private:
         return lookup_column_family(db, ks_name, cf_name).schema();
     }
     static partition_key key_from_thrift(schema_ptr s, bytes k) {
-        if (s->partition_key_size() != 1) {
-            fail(unimplemented::cause::THRIFT);
+        if (s->partition_key_size() == 1) {
+            return partition_key::from_single_value(*s, k);
         }
-        return partition_key::from_single_value(*s, std::move(k));
+        return partition_key::from_exploded(legacy_compound_type::select_values(
+                    legacy_compound_type::parse(*s->partition_key_type(), k)));
     }
     static db::consistency_level cl_from_thrift(const ConsistencyLevel::type consistency_level) {
         switch(consistency_level) {
@@ -1029,6 +1030,13 @@ private:
         } else {
             return { };
         }
+    }
+    static clustering_key_prefix make_clustering_prefix(const schema& s, bytes v) {
+        if (s.clustering_key_size() == 1) {
+            return clustering_key_prefix::from_single_value(s, v);
+        }
+        return clustering_key_prefix::from_exploded(legacy_compound_type::select_values(
+                    legacy_compound_type::parse(*s.clustering_key_type(), v)));
     }
 };
 
