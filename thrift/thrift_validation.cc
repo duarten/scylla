@@ -40,12 +40,8 @@
  */
 
 #include "thrift_validation.hh"
-#include "Cassandra.h"
 #include "utils/fb_utilities.hh"
 #include "utils/exceptions.hh"
-
-using namespace ::apache::thrift;
-using namespace  ::org::apache::cassandra;
 
 namespace thrift_validation {
 
@@ -73,6 +69,16 @@ void validate_column_names(const std::vector<std::string>& names) {
             throw make_exception<InvalidRequestException>("column name must not be empty");
         }
     }
+}
+
+void validate_column(const Column& col, const column_definition& def) {
+    if (!col.__isset.value) {
+        throw make_exception<InvalidRequestException>("Column value is required");
+    }
+    if (!col.__isset.timestamp) {
+        throw make_exception<InvalidRequestException>("Column timestamp is required");
+    }
+    def.type->validate(to_bytes(col.value));
 }
 
 }

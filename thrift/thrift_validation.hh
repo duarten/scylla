@@ -43,6 +43,10 @@
 
 #include "schema.hh"
 #include "bytes.hh"
+#include "Cassandra.h"
+
+using namespace ::apache::thrift;
+using namespace  ::org::apache::cassandra;
 
 #if 0
 import java.nio.ByteBuffer;
@@ -85,6 +89,7 @@ namespace thrift_validation {
 
 void validate_key(const schema& s, const bytes& key);
 void validate_column_names(const std::vector<std::string>& names);
+void validate_column(const Column& col, const column_definition& def);
 
 #if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException
