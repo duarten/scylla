@@ -95,4 +95,16 @@ void validate_cf_def(const CfDef& cf_def) {
     }
 }
 
+void validate_column_names(const std::vector<std::string>& names) {
+    auto max_name_length = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
+    for (auto&& n : names) {
+        if (n.size() > max_name_length) {
+            throw make_exception<InvalidRequestException>("column name length must not be greater than %s", max_name_length);
+        }
+        if (n.empty()) {
+            throw make_exception<InvalidRequestException>("column name must not be empty");
+        }
+    }
+}
+
 }

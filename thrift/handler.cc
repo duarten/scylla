@@ -1115,6 +1115,7 @@ private:
         std::vector<column_id> regular_columns;
         uint32_t per_partition_row_limit = query::max_rows;
         if (predicate.__isset.column_names) {
+            thrift_validation::validate_column_names(predicate.column_names);
             std::vector<std::string> unique_column_names;
             boost::copy(predicate.column_names | boost::adaptors::uniqued, std::back_inserter(unique_column_names));
             if (is_dynamic(s)) {
