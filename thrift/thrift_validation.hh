@@ -84,6 +84,7 @@ namespace thrift_validation {
 #endif
 
 void validate_key(const schema& s, const bytes& key);
+void validate_column_names(const std::vector<std::string>& names);
 
 #if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException
