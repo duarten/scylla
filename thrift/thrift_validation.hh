@@ -83,7 +83,7 @@ namespace thrift_validation {
     private static final Logger logger = LoggerFactory.getLogger(ThriftValidation.class);
 #endif
 
-void validate_key(schema_ptr schema_, const bytes& key);
+void validate_key(const schema& s, const bytes& key);
 
 #if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException
