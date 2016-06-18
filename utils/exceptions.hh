@@ -29,6 +29,14 @@ typedef std::function<bool (const std::system_error &)> system_error_lambda_t;
 bool check_exception(system_error_lambda_t f);
 bool is_system_error_errno(int err_no);
 
+template <typename Ex, typename... Args>
+Ex
+make_exception(const char* fmt, Args&&... args) {
+    Ex ex;
+    ex.why = sprint(fmt, std::forward<Args>(args)...);
+    return ex;
+}
+
 class storage_io_error : public std::exception {
 private:
     std::error_code _code;
