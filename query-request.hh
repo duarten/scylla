@@ -103,12 +103,13 @@ constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
 // Schema-dependent.
 class partition_slice {
 public:
-    enum class option { send_clustering_key, send_partition_key, send_timestamp, send_expiry, reversed, distinct, collections_as_maps };
+    enum class option { send_clustering_key, send_partition_key, send_timestamp, send_expiry, send_ttl, reversed, distinct, collections_as_maps };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
         option::send_partition_key,
         option::send_timestamp,
         option::send_expiry,
+        option::send_ttl,
         option::reversed,
         option::distinct,
         option::collections_as_maps>>;
