@@ -95,8 +95,8 @@ public:
     }
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk) {
-        return _sst->binary_search(entries, sk);
+    int binary_search(const schema& s, const T& entries, const key& sk) {
+        return _sst->binary_search(s, entries, sk);
     }
 
     void change_generation_number(int64_t generation) {

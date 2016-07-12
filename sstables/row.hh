@@ -54,7 +54,7 @@ public:
     // (according to the schema) before use.
     // As explained above, the key object is only valid during this call, and
     // if the implementation wishes to save it, it must copy the *contents*.
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) = 0;
+    virtual proceed consume_row_start(bytes_view key_bytes, sstables::deletion_time deltime) = 0;
 
     // Consume one cell (column name and value). Both are serialized, and need
     // to be deserialized according to the schema.

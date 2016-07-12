@@ -450,11 +450,11 @@ private:
     future<uint64_t> data_end_position(uint64_t summary_idx, const io_priority_class& pc);
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk, const dht::token& token);
+    int binary_search(const schema& s, const T& entries, const key& sk, const dht::token& token);
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk) {
-        return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
+    int binary_search(const schema& s, const T& entries, const key& sk) {
+        return binary_search(s, entries, sk, dht::global_partitioner().get_token(key_view(sk)));
     }
 
     // Returns position in the data file of the first entry which is not

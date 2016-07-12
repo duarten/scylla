@@ -1834,7 +1834,7 @@ sstable::get_first_partition_key(const schema& s) const {
     if (_summary.first_key.value.empty()) {
         throw std::runtime_error("first key of summary is empty");
     }
-    return key::from_bytes(_summary.first_key.value).to_partition_key(s);
+    return key::from_bytes(s, _summary.first_key.value).to_partition_key(s);
 }
 
 partition_key
@@ -1842,7 +1842,7 @@ sstable::get_last_partition_key(const schema& s) const {
     if (_summary.last_key.value.empty()) {
         throw std::runtime_error("last key of summary is empty");
     }
-    return key::from_bytes(_summary.last_key.value).to_partition_key(s);
+    return key::from_bytes(s, _summary.last_key.value).to_partition_key(s);
 }
 
 dht::decorated_key sstable::get_first_decorated_key(const schema& s) const {

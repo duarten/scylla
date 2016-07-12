@@ -53,7 +53,7 @@ namespace sstables {
  * a key view via get_key().
  */
 template <typename T>
-int sstable::binary_search(const T& entries, const key& sk, const dht::token& token) {
+int sstable::binary_search(const schema& s, const T& entries, const key& sk, const dht::token& token) {
     int low = 0, mid = entries.size(), high = mid - 1, result = -1;
 
     auto& partitioner = dht::global_partitioner();
@@ -64,7 +64,7 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
         // creation by keeping only a key view, and then manually carrying out
         // both parts of the comparison ourselves.
         mid = low + ((high - low) >> 1);
-        key_view mid_key = entries[mid].get_key();
+        key_view mid_key = entries[mid].get_key(s);
         auto mid_token = partitioner.get_token(mid_key);
 
         if (token == mid_token) {
@@ -87,8 +87,8 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
 
 // Force generation, so we make it available outside this compilation unit without moving that
 // much code to .hh
-template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
-template int sstable::binary_search<>(const std::vector<index_entry>& entries, const key& sk);
+template int sstable::binary_search<>(const schema& s, const std::vector<summary_entry>& entries, const key& sk);
+template int sstable::binary_search<>(const schema& s, const std::vector<index_entry>& entries, const key& sk);
 
 static inline bytes pop_back(std::vector<bytes>& vec) {
     auto b = std::move(vec.back());
@@ -274,10 +274,10 @@ public:
                     query::clustering_key_filtering_context ck_filtering,
                     const io_priority_class& pc)
             : _schema(schema)
-            , _key(key_view(key))
+            , _key(key)
             , _pc(&pc)
             , _ck_filtering(ck_filtering)
-            , _filter(_ck_filtering.get_filter_for_sorted(partition_key::from_exploded(*_schema, key.explode(*_schema))))
+            , _filter(_ck_filtering.get_filter_for_sorted(partition_key::from_exploded(*_schema, key.explode())))
     { }
 
     mp_row_consumer(const key& key,
@@ -299,9 +299,10 @@ public:
 
     mp_row_consumer() : _ck_filtering(query::no_clustering_key_filtering) {}
 
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    virtual proceed consume_row_start(bytes_view key_bytes, sstables::deletion_time deltime) override {
+        auto key = key_view(*_schema, key_bytes);
         if (_key.empty() || key == _key) {
-            _mutation = new_mutation { partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime) };
+            _mutation = new_mutation { partition_key::from_exploded(key.explode()), tombstone(deltime) };
             _is_mutation_end = false;
             _skip_partition = false;
             _skip_clustering_row = false;
@@ -710,20 +711,20 @@ sstables::sstable::read_row(schema_ptr schema,
 
     auto& summary = _summary;
 
-    if (token < partitioner.get_token(key_view(summary.first_key.value))
-            || token > partitioner.get_token(key_view(summary.last_key.value))) {
+    if (token < partitioner.get_token(key_view(*schema, summary.first_key.value))
+            || token > partitioner.get_token(key_view(*schema, summary.last_key.value))) {
         _filter_tracker.add_false_positive();
         return make_ready_future<streamed_mutation_opt>();
     }
 
-    auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
+    auto summary_idx = adjust_binary_search_index(binary_search(*schema, summary.entries, key, token));
     if (summary_idx < 0) {
         _filter_tracker.add_false_positive();
         return make_ready_future<streamed_mutation_opt>();
     }
 
     return read_indexes(summary_idx, pc).then([this, schema, ck_filtering, &key, token, summary_idx, &pc] (auto index_list) {
-        auto index_idx = this->binary_search(index_list, key, token);
+        auto index_idx = this->binary_search(*schema, index_list, key, token);
         if (index_idx < 0) {
             _filter_tracker.add_false_positive();
             return make_ready_future<streamed_mutation_opt>();
@@ -849,19 +850,19 @@ public:
     }
 
     bool operator()(const summary_entry& e, const dht::ring_position& rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
+        return tri_cmp(e.get_key(_s), rp) < 0;
     }
 
     bool operator()(const index_entry& e, const dht::ring_position& rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
+        return tri_cmp(e.get_key(_s), rp) < 0;
     }
 
     bool operator()(const dht::ring_position& rp, const summary_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
+        return tri_cmp(e.get_key(_s), rp) > 0;
     }
 
     bool operator()(const dht::ring_position& rp, const index_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
+        return tri_cmp(e.get_key(_s), rp) > 0;
     }
 };
 
@@ -955,7 +956,7 @@ class key_reader final : public ::key_reader::impl {
     const io_priority_class& _pc;
 private:
     dht::decorated_key decorate(const index_entry& ie) {
-        auto pk = partition_key::from_exploded(*_s, ie.get_key().explode(*_s));
+        auto pk = partition_key::from_exploded(*_s, ie.get_key(*_s).explode());
         return dht::global_partitioner().decorate_key(*_s, std::move(pk));
     }
 public:

@@ -67,8 +67,8 @@ public:
         return bytes_view(reinterpret_cast<const bytes::value_type *>(_key.get()), _key.size());
     }
 
-    key_view get_key() const {
-        return { get_key_bytes() };
+    key_view get_key(const schema& s) const {
+        return key_view(s, get_key_bytes());
     }
 
     uint64_t position() const {
@@ -84,8 +84,8 @@ struct summary_entry {
     bytes key;
     uint64_t position;
 
-    key_view get_key() const {
-        return { key };
+    key_view get_key(const schema& s) const {
+        return key_view(s, key);
     }
 
     bool operator==(const summary_entry& x) const {

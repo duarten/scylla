@@ -353,8 +353,8 @@ public:
     int count_deleted_cell = 0;
     int count_range_tombstone = 0;
     int count_row_end = 0;
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        BOOST_REQUIRE(bytes_view(key) == as_bytes("vinna"));
+    virtual proceed consume_row_start(bytes_view key_bytes, sstables::deletion_time deltime) override {
+        BOOST_REQUIRE(key_bytes == as_bytes("vinna"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         count_row_start++;
@@ -487,7 +487,7 @@ public:
     int count_deleted_cell = 0;
     int count_row_end = 0;
     int count_range_tombstone = 0;
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    virtual proceed consume_row_start(bytes_view key_bytes, sstables::deletion_time deltime) override {
         count_row_start++;
         return proceed::yes;
     }
@@ -628,9 +628,9 @@ class ttl_row_consumer : public count_row_consumer {
 public:
     const int64_t desired_timestamp;
     ttl_row_consumer(int64_t t) : desired_timestamp(t) { }
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        count_row_consumer::consume_row_start(key, deltime);
-        BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
+    virtual proceed consume_row_start(bytes_view key_bytes, sstables::deletion_time deltime) override {
+        count_row_consumer::consume_row_start(key_bytes, deltime);
+        BOOST_REQUIRE(key_bytes == as_bytes("nadav"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         return proceed::yes;
@@ -683,9 +683,9 @@ SEASTAR_TEST_CASE(ttl_read) {
 
 class deleted_cell_row_consumer : public count_row_consumer {
 public:
-    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        count_row_consumer::consume_row_start(key, deltime);
-        BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
+    virtual proceed consume_row_start(bytes_view key_bytes, sstables::deletion_time deltime) override {
+        count_row_consumer::consume_row_start(key_bytes, deltime);
+        BOOST_REQUIRE(key_bytes == as_bytes("nadav"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         return proceed::yes;
@@ -738,7 +738,7 @@ SEASTAR_TEST_CASE(find_key_map) {
         kk.push_back(make_map_value(map_type, map));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, summary.entries, key) == 0);
     });
 }
 
@@ -759,7 +759,7 @@ SEASTAR_TEST_CASE(find_key_set) {
         kk.push_back(make_set_value(set_type, set));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, summary.entries, key) == 0);
     });
 }
 
@@ -780,7 +780,7 @@ SEASTAR_TEST_CASE(find_key_list) {
         kk.push_back(make_list_value(list_type, list));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, summary.entries, key) == 0);
     });
 }
 
@@ -798,18 +798,19 @@ SEASTAR_TEST_CASE(find_key_composite) {
         kk.push_back(data_value(b2));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, summary.entries, key) == 0);
     });
 }
 
 SEASTAR_TEST_CASE(all_in_place) {
     return reusable_sst("tests/sstables/bigsummary", 76).then([] (auto sstp) {
+        auto s = uncompressed_schema();
         auto& summary = sstables::test(sstp)._summary();
 
         int idx = 0;
         for (auto& e: summary.entries) {
-            auto key = sstables::key::from_bytes(e.key);
-            BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == idx++);
+            auto key = sstables::key::from_bytes(*s, e.key);
+            BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, summary.entries, key) == idx++);
         }
     });
 }
@@ -817,10 +818,11 @@ SEASTAR_TEST_CASE(all_in_place) {
 SEASTAR_TEST_CASE(full_index_search) {
     return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
         return sstables::test(sstp).read_indexes(0).then([sstp] (auto index_list) {
+            auto s = uncompressed_schema();
             int idx = 0;
             for (auto& ie: index_list) {
-                auto key = key::from_bytes(to_bytes(ie.get_key_bytes()));
-                BOOST_REQUIRE(sstables::test(sstp).binary_search(index_list, key) == idx++);
+                auto key = key::from_bytes(*s, to_bytes(ie.get_key_bytes()));
+                BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, index_list, key) == idx++);
             }
         });
     });
@@ -840,15 +842,15 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         // (result + 1) * -1 -1 = 0
-        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == -2);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(*s, summary.entries, key) == -2);
     });
 }
 
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
     return reusable_sst("tests/sstables/wrongrange", 114).then([] (auto sstp) {
-        return do_with(sstables::key("todata"), [sstp] (auto& key) {
-            auto s = columns_schema();
+        auto s = columns_schema();
+        return do_with(sstables::key(*s, "todata"), [sstp, s] (auto& key) {
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 return make_ready_future<>();
             });
