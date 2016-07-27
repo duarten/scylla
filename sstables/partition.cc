@@ -194,6 +194,11 @@ private:
                     }
                 }
             }
+
+            if (cdef && cdef->dropped_at() == api::missing_timestamp && is_static != cdef->is_static()) {
+                throw malformed_sstable_exception(seastar::format("Missmatch between {} cell and {} column definiiton",
+                        is_static ? "static" : "non-static", cdef->is_static() ? "static" : "non-static"));
+            }
         }
     };
 
