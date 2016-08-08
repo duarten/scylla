@@ -242,16 +242,10 @@ public:
     // Converts a wrap-around range to two non-wrap-around ranges.
     // The returned ranges are not overlapping and ordered.
     // Call only when is_wrap_around().
-    std::pair<range, range> unwrap() const & {
+    std::pair<range, range> unwrap() const {
         return {
             { {}, end() },
             { start(), {} }
-        };
-    }
-    std::pair<range, range> unwrap() const && {
-        return {
-            { {}, std::move(end()) },
-            { std::move(start()), {} }
         };
     }
     // the point is inside the range
@@ -434,18 +428,6 @@ public:
         deoverlapped_ranges.emplace_back(std::move(current));
         return deoverlapped_ranges;
     }
-
-    // Marks the current instance as unable to wrap around. Can only be called
-    // if !is_wrap_around().
-    explicit operator range<T, can_wrap::no>&() const {
-        return static_cast<range<T, can_wrap::no>&>(*this);
-    }
-
-    // Marks the current instance as possibly wrapping around.
-    operator range<T, can_wrap::yes>&() const {
-        return static_cast<range<T, can_wrap::yes>&>(*this);
-    }
-
     template<typename U, can_wrap W>
     friend std::ostream& operator<<(std::ostream& out, const range<U, W>& r);
 };
@@ -479,26 +461,6 @@ std::ostream& operator<<(std::ostream& out, const range<U, W>& r) {
     }
 
     return out;
-}
-
-template<typename T, typename Comparator>
-static inline std::vector<range<T, can_wrap::no>> as_non_wrapping(std::vector<range<T, can_wrap::yes>>&& ranges, Comparator&& cmp) {
-    std::vector<range<T, can_wrap::no>> unwrapped;
-    for (auto&& r : ranges) {
-        if (r.is_wrap_around(cmp)) {
-            auto uw = std::move(r).unwrap();
-            unwrapped.push_back(std::move(static_cast<range<T, can_wrap::no>&>(uw.first)));
-            unwrapped.push_back(std::move(static_cast<range<T, can_wrap::no>&>(uw.second)));
-        } else {
-            unwrapped.push_back(std::move(static_cast<range<T, can_wrap::no>&>(r)));
-        }
-    }
-    return unwrapped;
-}
-
-template<typename T, can_wrap CanWrap>
-static inline std::vector<range<T, can_wrap::yes>> as_possibly_wrapping(std::vector<range<T, CanWrap>>&& ranges) {
-    return std::move(static_cast<std::vector<range<T, can_wrap::yes>>>(ranges));
 }
 
 // Allow using range<T> in a hash table. The hash function 31 * left +

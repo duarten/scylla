@@ -56,7 +56,7 @@ namespace restrictions {
  */
 template<typename ValueType>
 class single_column_primary_key_restrictions : public primary_key_restrictions<ValueType> {
-    using range_type = query::range<ValueType>;
+    using range_type = query::range<ValueType, can_wrap::no>;
     using range_bound = typename range_type::bound;
     using bounds_range_type = typename primary_key_restrictions<ValueType>::bounds_range_type;
 private:
@@ -336,7 +336,7 @@ std::vector<query::partition_range>
 single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
     std::vector<query::partition_range> ranges;
     ranges.reserve(size());
-    for (query::range<partition_key>& r : compute_bounds(options)) {
+    for (range_type& r : compute_bounds(options)) {
         if (!r.is_singular()) {
             throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
         }

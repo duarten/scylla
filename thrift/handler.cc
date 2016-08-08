@@ -1591,12 +1591,12 @@ private:
         return ret;
     }
     template<typename RangeType, typename Comparator>
-    static std::vector<range<RangeType>> make_non_overlapping_ranges(
+    static std::vector<range<RangeType, can_wrap::no>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
-            const std::function<range<RangeType>(ColumnSlice&&)> mapper,
+            const std::function<range<RangeType, can_wrap::yes>(ColumnSlice&&)> mapper,
             const Comparator&& cmp,
             bool reversed) {
-        std::vector<range<RangeType>> ranges;
+        std::vector<range<RangeType, can_wrap::no>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
             if (!reversed && range.is_wrap_around(cmp)) {
@@ -1606,9 +1606,9 @@ private:
             } else if (reversed) {
                 range.reverse();
             }
-            return range;
+            return ::range<RangeType, can_wrap::no>(std::move(range));
         });
-        return range<RangeType>::deoverlap(std::move(ranges), cmp);
+        return range<RangeType, can_wrap::no>::deoverlap(std::move(ranges), cmp);
     }
     static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
         using bound = query::clustering_range::bound;

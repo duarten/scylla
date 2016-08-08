@@ -25,7 +25,9 @@ class range_bound {
     bool is_inclusive();
 };
 
-template<typename T>
+enum class can_wrap : uint8_t { no, yes };
+
+template<typename T, can_wrap CanWrap>
 class range {
     std::experimental::optional<range_bound<T>> start();
     std::experimental::optional<range_bound<T>> end();

@@ -33,12 +33,12 @@
 
 namespace query {
 
-template <typename T>
-using range = ::range<T>;
+template <typename T, can_wrap CanWrap = can_wrap::yes>
+using range = ::range<T, CanWrap>;
 
 using ring_position = dht::ring_position;
 using partition_range = range<ring_position>;
-using clustering_range = range<clustering_key_prefix>;
+using clustering_range = range<clustering_key_prefix, can_wrap::no>;
 
 extern const partition_range full_partition_range;
 

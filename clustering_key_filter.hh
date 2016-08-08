@@ -44,7 +44,7 @@ public:
     virtual clustering_key_filter get_filter(const partition_key&) = 0;
     // Create a clustering key filter that can be used for multiple clustering keys but they have to be sorted.
     virtual clustering_key_filter get_filter_for_sorted(const partition_key&) = 0;
-    virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key&) = 0;
+    virtual const std::vector<range<clustering_key_prefix, can_wrap::no>>& get_ranges(const partition_key&) = 0;
     virtual ~clustering_key_filter_factory() = default;
 };
 
@@ -62,7 +62,7 @@ public:
     clustering_key_filter get_filter_for_sorted(const partition_key& key) const {
         return _factory ? _factory->get_filter_for_sorted(key) : [] (const clustering_key&) { return true; };
     }
-    const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) const;
+    const std::vector<range<clustering_key_prefix, can_wrap::no>>& get_ranges(const partition_key& key) const;
 
     static const clustering_key_filtering_context create(schema_ptr, const partition_slice&);
 
