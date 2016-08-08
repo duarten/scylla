@@ -47,8 +47,10 @@ public:
     }
 };
 
+enum class can_wrap { no, yes };
+
 // A range which can have inclusive, exclusive or open-ended bounds on each end.
-template<typename T>
+template<typename T, can_wrap CanWrap = can_wrap::yes>
 class range {
     template <typename U>
     using optional = std::experimental::optional<U>;
@@ -69,7 +71,23 @@ public:
         , _end()
         , _singular(true)
     { }
-    range() : range({}, {}) {}
+    range()
+        : _start()
+        , _end()
+        , _singular(false)
+    { }
+    template<can_wrap U = CanWrap>
+    range(range<T, can_wrap::no>&& r, typename std::enable_if<U == can_wrap::yes>::type* = 0)
+        : _start(std::move(r.start()))
+        , _end(std::move(r.end()))
+        , _singular(r.is_singular())
+    { }
+    template<can_wrap U = CanWrap>
+    range(range<T, can_wrap::yes>&& r, typename std::enable_if<U == can_wrap::no>::type* = 0)
+        : _start(std::move(r.start()))
+        , _end(std::move(r.end()))
+        , _singular(r.is_singular())
+    { }
 private:
     // Bound wrappers for compile-time dispatch and safety.
     struct start_bound_ref { const optional<bound>& b; };
@@ -205,8 +223,9 @@ public:
     // Range is a wrap around if end value is smaller than the start value
     // or they're equal and at least one bound is not inclusive.
     // Comparator must define a total ordering on T.
-    template<typename Comparator>
-    bool is_wrap_around(Comparator&& cmp) const {
+    template<typename Comparator, can_wrap U = CanWrap>
+    std::enable_if_t<U == can_wrap::yes, bool>
+    is_wrap_around(Comparator&& cmp) const {
         if (_end && _start) {
             auto r = cmp(end()->value(), start()->value());
             return r < 0
@@ -215,13 +234,24 @@ public:
             return false; // open ended range or singular range don't wrap around
         }
     }
+    template<typename Comparator, can_wrap U = CanWrap>
+    std::enable_if_t<U == can_wrap::no, bool>
+    is_wrap_around(Comparator&& cmp) const {
+        return false;
+    }
     // Converts a wrap-around range to two non-wrap-around ranges.
     // The returned ranges are not overlapping and ordered.
     // Call only when is_wrap_around().
-    std::pair<range, range> unwrap() const {
+    std::pair<range, range> unwrap() const & {
         return {
             { {}, end() },
             { start(), {} }
+        };
+    }
+    std::pair<range, range> unwrap() const && {
+        return {
+            { {}, std::move(end()) },
+            { std::move(start()), {} }
         };
     }
     // the point is inside the range
@@ -363,7 +393,7 @@ public:
     // Takes a vector of possibly overlapping ranges and returns a vector containing
     // a set of non-overlapping ranges covering the same values.
     template<typename Comparator>
-    static std::vector<range<T>> deoverlap(std::vector<range<T>> ranges, Comparator&& cmp) {
+    static std::vector<range<T, CanWrap>> deoverlap(std::vector<range<T, CanWrap>> ranges, Comparator&& cmp) {
         auto size = ranges.size();
         if (size <= 1) {
             return ranges;
@@ -379,10 +409,10 @@ public:
         }
 
         std::sort(ranges.begin(), ranges.end(), [&](auto&& r1, auto&& r2) {
-            return range<T>::less_than(r1.start_bound(), r2.start_bound(), cmp);
+            return range<T, CanWrap>::less_than(r1.start_bound(), r2.start_bound(), cmp);
         });
 
-        std::vector<range<T>> deoverlapped_ranges;
+        std::vector<range<T, CanWrap>> deoverlapped_ranges;
         deoverlapped_ranges.reserve(size);
 
         auto&& current = ranges[0];
@@ -405,12 +435,23 @@ public:
         return deoverlapped_ranges;
     }
 
-    template<typename U>
-    friend std::ostream& operator<<(std::ostream& out, const range<U>& r);
+    // Marks the current instance as unable to wrap around. Can only be called
+    // if !is_wrap_around().
+    explicit operator range<T, can_wrap::no>&() const {
+        return static_cast<range<T, can_wrap::no>&>(*this);
+    }
+
+    // Marks the current instance as possibly wrapping around.
+    operator range<T, can_wrap::yes>&() const {
+        return static_cast<range<T, can_wrap::yes>&>(*this);
+    }
+
+    template<typename U, can_wrap W>
+    friend std::ostream& operator<<(std::ostream& out, const range<U, W>& r);
 };
 
-template<typename U>
-std::ostream& operator<<(std::ostream& out, const range<U>& r) {
+template<typename U, can_wrap W>
+std::ostream& operator<<(std::ostream& out, const range<U, W>& r) {
     if (r.is_singular()) {
         return out << "==" << r.start()->value();
     }
@@ -440,13 +481,33 @@ std::ostream& operator<<(std::ostream& out, const range<U>& r) {
     return out;
 }
 
+template<typename T, typename Comparator>
+static inline std::vector<range<T, can_wrap::no>> as_non_wrapping(std::vector<range<T, can_wrap::yes>>&& ranges, Comparator&& cmp) {
+    std::vector<range<T, can_wrap::no>> unwrapped;
+    for (auto&& r : ranges) {
+        if (r.is_wrap_around(cmp)) {
+            auto uw = std::move(r).unwrap();
+            unwrapped.push_back(std::move(static_cast<range<T, can_wrap::no>&>(uw.first)));
+            unwrapped.push_back(std::move(static_cast<range<T, can_wrap::no>&>(uw.second)));
+        } else {
+            unwrapped.push_back(std::move(static_cast<range<T, can_wrap::no>&>(r)));
+        }
+    }
+    return unwrapped;
+}
+
+template<typename T, can_wrap CanWrap>
+static inline std::vector<range<T, can_wrap::yes>> as_possibly_wrapping(std::vector<range<T, CanWrap>>&& ranges) {
+    return std::move(static_cast<std::vector<range<T, can_wrap::yes>>>(ranges));
+}
+
 // Allow using range<T> in a hash table. The hash function 31 * left +
 // right is the same one used by Cassandra's AbstractBounds.hashCode().
 namespace std {
 
-template<typename T>
-struct hash<range<T>> {
-    using argument_type =  range<T>;
+template<typename T, can_wrap CanWrap>
+struct hash<range<T, CanWrap>> {
+    using argument_type = range<T, CanWrap>;
     using result_type = decltype(std::hash<T>()(std::declval<T>()));
     result_type operator()(argument_type const& s) const {
         auto hash = std::hash<T>();
