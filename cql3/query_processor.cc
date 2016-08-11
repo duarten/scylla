@@ -132,6 +132,15 @@ query_processor::process(const sstring_view& query_string, service::query_state&
     return process_statement(std::move(cql_statement), query_state, options);
 }
 
+
+static ::shared_ptr<result_message> try_recover(std::exception_ptr eptr) {
+    try {
+        std::rethrow_exception(eptr);
+    } catch(exceptions::empty_result&) {
+        return ::make_shared<result_message::void_message>();
+    }
+}
+
 future<::shared_ptr<result_message>>
 query_processor::process_statement(::shared_ptr<cql_statement> statement, service::query_state& query_state,
         const query_options& options)
@@ -159,7 +168,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
             return make_ready_future<::shared_ptr<result_message>>(
                 ::make_shared<result_message::void_message>());
         });
-    });
+    }).handle_exception(&try_recover);
 }
 
 future<::shared_ptr<transport::messages::result_message::prepared>>

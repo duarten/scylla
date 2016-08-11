@@ -260,4 +260,9 @@ public:
     unsupported_operation_exception(const sstring& msg) : std::runtime_error("unsupported operation: " + msg) {}
 };
 
+class empty_result : public std::runtime_error {
+public:
+    empty_result() : std::runtime_error("An empty result query; this exception should aways be caught.") {}
+};
+
 }
