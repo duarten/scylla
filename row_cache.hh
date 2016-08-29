@@ -34,6 +34,7 @@
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "partition_version.hh"
+#include "tracing/trace_state.hh"
 
 namespace scollectd {
 
@@ -260,7 +261,8 @@ private:
     mutation_reader make_scanning_reader(schema_ptr,
                                          const query::partition_range&,
                                          const io_priority_class& pc,
-                                         query::clustering_key_filtering_context ck_filtering);
+                                         query::clustering_key_filtering_context ck_filtering,
+                                         tracing::trace_state_ptr trace_state);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -283,7 +285,8 @@ public:
     mutation_reader make_reader(schema_ptr,
                                 const query::partition_range& = query::full_partition_range,
                                 query::clustering_key_filtering_context = query::no_clustering_key_filtering,
-                                const io_priority_class& = default_priority_class());
+                                const io_priority_class& = default_priority_class(),
+                                tracing::trace_state_ptr trace_state = tracing::trace_state_ptr());
 
     const stats& stats() const { return _stats; }
 public:
