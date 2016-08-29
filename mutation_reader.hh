@@ -27,6 +27,7 @@
 #include "core/future.hh"
 #include "core/future-util.hh"
 #include "core/do_with.hh"
+#include "tracing/trace_state.hh"
 
 // A mutation_reader is an object which allows iterating on mutations: invoke
 // the function to get a future for the next mutation, with an unset optional
@@ -189,27 +190,34 @@ class mutation_source {
     using partition_range = const query::partition_range&;
     using clustering_filter = query::clustering_key_filtering_context;
     using io_priority = const io_priority_class&;
-    std::function<mutation_reader(schema_ptr, partition_range, clustering_filter, io_priority)> _fn;
+    std::function<mutation_reader(schema_ptr, partition_range, clustering_filter, io_priority, tracing::trace_state_ptr)> _fn;
 public:
+    mutation_source(std::function<mutation_reader(schema_ptr, partition_range, clustering_filter, io_priority, tracing::trace_state_ptr)> fn)
+            : _fn(std::move(fn)) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, clustering_filter, io_priority)> fn)
-        : _fn(std::move(fn)) {}
+        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority pc, tracing::trace_state_ptr) {
+            return fn(s, range, ck_filtering, pc);
+        }) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, clustering_filter)> fn)
-        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority) {
+        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority, tracing::trace_state_ptr) {
             return fn(s, range, ck_filtering);
         }) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range range)> fn)
-        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter, io_priority) {
+        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter, io_priority, tracing::trace_state_ptr) {
             return fn(s, range);
         }) {}
 
+    mutation_reader operator()(schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority pc, tracing::trace_state_ptr trace_state) const {
+        return _fn(std::move(s), range, ck_filtering, pc, std::move(trace_state));
+    }
     mutation_reader operator()(schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority pc) const {
-        return _fn(std::move(s), range, ck_filtering, pc);
+        return _fn(std::move(s), range, ck_filtering, pc, tracing::trace_state_ptr());
     }
     mutation_reader operator()(schema_ptr s, partition_range range, clustering_filter ck_filtering) const {
-        return _fn(std::move(s), range, ck_filtering, default_priority_class());
+        return _fn(std::move(s), range, ck_filtering, default_priority_class(), tracing::trace_state_ptr());
     }
     mutation_reader operator()(schema_ptr s, partition_range range) const {
-        return _fn(std::move(s), range, query::no_clustering_key_filtering, default_priority_class());
+        return _fn(std::move(s), range, query::no_clustering_key_filtering, default_priority_class(), tracing::trace_state_ptr());
     }
 };
 
