@@ -376,6 +376,18 @@ public:
     bool operator==(const wrapping_range& other) const {
         return (_start == other._start) && (_end == other._end) && (_singular == other._singular);
     }
+    template<typename Comparator>
+    static auto less_comparator_by_start(Comparator&& cmp) {
+        return [cmp = std::forward<Comparator>(cmp)](const wrapping_range& r1, const wrapping_range& r2) -> bool {
+            return less_than(r1.start_bound(), r2.start_bound(), cmp);
+        };
+    }
+    template<typename Comparator>
+    static auto less_comparator_by_end(Comparator&& cmp) {
+        return [cmp = std::forward<Comparator>(cmp)](const wrapping_range& r1, const wrapping_range& r2) -> bool {
+            return !greater_than_or_equal(r1.end_bound(), r2.end_bound(), cmp);
+        };
+    }
 
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const wrapping_range<U>& r);
@@ -592,6 +604,19 @@ public:
         deoverlapped_ranges.emplace_back(std::move(current));
         return deoverlapped_ranges;
     }
+    template<typename Comparator>
+    static auto less_comparator_by_start(Comparator&& cmp) {
+        return [cmp = std::forward<Comparator>(cmp)](const nonwrapping_range& r1, const nonwrapping_range& r2) -> bool {
+            return wrapping_range<T>::less_than(r1._range.start_bound(), r2._range.start_bound(), cmp);
+        };
+    }
+    template<typename Comparator>
+    static auto less_comparator_by_end(Comparator&& cmp) {
+        return [cmp = std::forward<Comparator>(cmp)](const nonwrapping_range& r1, const nonwrapping_range& r2) -> bool {
+            return !wrapping_range<T>::greater_than_or_equal(r1._range.end_bound(), r2._range.end_bound(), cmp);
+        };
+    }
+
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r);
 };
