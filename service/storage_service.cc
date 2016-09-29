@@ -3188,5 +3188,69 @@ future<> storage_service::force_remove_completion() {
     });
 }
 
+static std::vector<std::pair<nonwrapping_range<dht::token>, uint64_t>>
+calculate_splits(std::vector<dht::token> tokens, uint32_t split_count, column_family& cf) {
+    auto sstables = cf.get_sstables();
+    const double step = static_cast<double>(tokens.size() - 1) / split_count;
+    auto prev_token_idx = 0;
+    std::vector<std::pair<nonwrapping_range<dht::token>, uint64_t>> splits;
+    splits.reserve(split_count);
+    for (uint32_t i = 1; i <= split_count; ++i) {
+        auto index = static_cast<uint32_t>(std::round(i * step));
+        nonwrapping_range<dht::token> range({{ std::move(tokens[prev_token_idx]) }}, {{ tokens[index] }});
+        // always return an estimate > 0 (see CASSANDRA-7322)
+        uint64_t estimated_keys_for_range = 0;
+        for (auto&& sst : *sstables) {
+            estimated_keys_for_range += sst->estimated_keys_for_range(range);
+        }
+        splits.emplace_back(std::move(range), std::max(static_cast<uint64_t>(cf.schema()->min_index_interval()), estimated_keys_for_range));
+        prev_token_idx = index;
+    }
+    return splits;
+};
+
+std::vector<std::pair<nonwrapping_range<dht::token>, uint64_t>>
+storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, range<dht::token> range, uint32_t keys_per_split) {
+    auto& cf = _db.local().find_column_family(ks_name, cf_name);
+    auto schema = cf.schema();
+    auto sstables = cf.get_sstables();
+    uint64_t total_row_count_estimate = 0;
+    uint32_t limits = 0;
+    std::vector<dht::token> tokens;
+    std::vector<nonwrapping_range<dht::token>> unwrapped;
+    if (range.is_wrap_around(dht::token_comparator())) {
+        auto uwr = range.unwrap();
+        unwrapped.emplace_back(std::move(uwr.second));
+        unwrapped.emplace_back(std::move(uwr.first));
+    } else {
+        unwrapped.emplace_back(std::move(range));
+    }
+    if (unwrapped[0].start()) {
+        tokens.push_back(std::move(unwrapped[0].start()->value()));
+        ++limits;
+    }
+    for (auto&& r : unwrapped) {
+        std::vector<dht::token> range_tokens;
+        for (auto &&sst : *sstables) {
+            total_row_count_estimate += sst->estimated_keys_for_range(r);
+            auto keys = sst->get_key_samples(*cf.schema(), r);
+            std::transform(keys.begin(), keys.end(), std::back_inserter(range_tokens), [](auto&& k) { return std::move(k.token()); });
+        }
+        std::sort(range_tokens.begin(), range_tokens.end());
+        std::move(range_tokens.begin(), range_tokens.end(), std::back_inserter(tokens));
+    }
+    if (unwrapped[unwrapped.size() - 1].end()) {
+        tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end()->value()));
+        ++limits;
+    }
+
+    // split_count should be much smaller than number of key samples, to avoid huge sampling error
+    constexpr uint32_t min_samples_per_split = 4;
+    uint64_t max_split_count = (tokens.size() - limits) / min_samples_per_split + 1;
+    uint32_t split_count = std::max(uint32_t(1), static_cast<uint32_t>(std::min(max_split_count, total_row_count_estimate / keys_per_split)));
+
+    return calculate_splits(std::move(tokens), split_count, cf);
+};
+
 } // namespace service
 
