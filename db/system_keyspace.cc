@@ -1253,5 +1253,29 @@ future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstri
     });
 }
 
+mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates) {
+    auto&& schema = db::system_keyspace::size_estimates();
+    auto timestamp = api::new_timestamp();
+    mutation m_to_apply{partition_key::from_single_value(*schema, to_bytes(ks)), schema};
+
+    // add a CQL row for each primary token range.
+    for (auto&& e : estimates) {
+        auto ck = clustering_key_prefix(std::vector<bytes>{
+                utf8_type->decompose(e.schema->cf_name()),
+                utf8_type->decompose(dht::global_partitioner().to_sstring(e.range_start_token)),
+                utf8_type->decompose(dht::global_partitioner().to_sstring(e.range_end_token))});
+
+        auto mean_partition_size_col = schema->get_column_definition("mean_partition_size");
+        auto cell = atomic_cell::make_live(timestamp, long_type->decompose(e.mean_partition_size), { });
+        m_to_apply.set_clustered_cell(ck, *mean_partition_size_col, std::move(cell));
+
+        auto partitions_count_col = schema->get_column_definition("partitions_count");
+        cell = atomic_cell::make_live(timestamp, long_type->decompose(e.partitions_count), { });
+        m_to_apply.set_clustered_cell(std::move(ck), *partitions_count_col, std::move(cell));
+    }
+
+    return m_to_apply;
+}
+
 } // namespace system_keyspace
 } // namespace db
