@@ -74,6 +74,7 @@ boost_tests = [
     'database_test',
     'input_stream_test',
     'nonwrapping_range_test',
+    'virtual_reader_test',
 ]
 
 other_tests = [
