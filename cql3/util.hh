@@ -34,6 +34,7 @@
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 #include "cql3/relation.hh"
+#include "cql3/statements/raw/select_statement.hh"
 
 namespace cql3 {
 
@@ -70,6 +71,25 @@ inline sstring rename_column_in_where_clause(const sstring_view& where_clause, c
         return rel->maybe_rename_identifier(from, to);
     });
     return relations_to_where_clause(new_relations);
+}
+
+static shared_ptr<cql3::statements::raw::select_statement> parse_select_statement(const sstring_view& select) {
+    return do_with_parser<shared_ptr<cql3::statements::raw::select_statement>>(select, [] (cql3_parser::CqlParser& parser) {
+        return parser.selectStatement();
+    });
+}
+
+inline shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
+            const sstring_view& cf_name, const sstring_view& where_clause, std::vector<sstring> included_columns) {
+    std::ostringstream out;
+    out << "SELECT ";
+    if (included_columns.empty()) {
+        out << "*";
+    } else {
+        out << boost::algorithm::join(included_columns, ", ");
+    }
+    out << " FROM " << cf_name << " WHERE " << where_clause << " ALLOW FILTERING";
+    return parse_select_statement(out.str());
 }
 
 } // namespace util
