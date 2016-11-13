@@ -1172,6 +1172,7 @@ public:
     future<> truncate(sstring ksname, sstring cfname, timestamp_func);
     future<> truncate(const keyspace& ks, column_family& cf, timestamp_func);
 
+    future<> load_column_family(schema_ptr s);
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func);
 
     const logalloc::region_group& dirty_memory_region_group() const {

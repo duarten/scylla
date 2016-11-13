@@ -1925,10 +1925,15 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
                     auto s = t.second;
-                    auto& ks = this->find_keyspace(s->ks_name());
-                    auto cfg = ks.make_column_family_config(*s, this->get_config());
-                    this->add_column_family(s, std::move(cfg));
-                    return ks.make_directory_for_column_family(s->cf_name(), s->id()).then([s] {});
+                    return this->load_column_family(t.second).then([s] {});
+                });
+            });
+        });
+    }).then([&proxy, this] {
+        return do_parse_system_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
+            return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<schema_ptr> views) {
+                return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
+                    return this->load_column_family(v).then([v] {});
                 });
             });
         });
@@ -2047,6 +2052,16 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
+    if (schema->is_view()) {
+        find_column_family(schema->view_info()->base_id()).add_or_update_view(schema);
+    }
+}
+
+future<> database::load_column_family(schema_ptr s) {
+    auto& ks = find_keyspace(s->ks_name());
+    auto cfg = ks.make_column_family_config(*s, this->get_config());
+    add_column_family(s, std::move(cfg));
+    return ks.make_directory_for_column_family(s->cf_name(), s->id());
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
