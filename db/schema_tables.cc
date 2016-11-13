@@ -1892,6 +1892,14 @@ void add_view_to_schema_mutation(schema_ptr view, api::timestamp_type timestamp,
     make_view_mutations(view, timestamp, with_columns).copy_to(mutations);
 }
 
+std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr view, api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+    add_view_to_schema_mutation(std::move(view), timestamp, true, mutations);
+    return mutations;
+}
+
 #if 0
     private static AbstractType<?> getComponentComparator(AbstractType<?> rawComparator, Integer componentIndex)
     {
