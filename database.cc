@@ -2071,6 +2071,9 @@ bool database::update_column_family(schema_ptr new_schema) {
     s->registry_entry()->mark_synced();
     cfm.set_schema(s);
     find_keyspace(s->ks_name()).metadata()->add_or_update_column_family(s);
+    if (s->is_view()) {
+        find_column_family(s->view_info()->base_id()).add_or_update_view(s);
+    }
     return columns_changed;
 }
 
