@@ -119,6 +119,8 @@ public:
 
     future<> announce_new_view(schema_ptr view, bool announce_locally = false);
 
+    future<> announce_view_update(schema_ptr view, bool announce_locally = false);
+
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied

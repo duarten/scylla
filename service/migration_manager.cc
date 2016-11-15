@@ -635,6 +635,27 @@ future<> migration_manager::announce_new_view(schema_ptr view, bool announce_loc
     }
 }
 
+future<> migration_manager::announce_view_update(schema_ptr view, bool announce_locally)
+{
+#if 0
+    view.metadata.validate();
+#endif
+    auto& db = get_local_storage_proxy().get_db().local();
+    try {
+        auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
+        auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
+#if 0
+        oldCfm.validateCompatility(cfm);
+#endif
+        logger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
+        auto mutations = db::schema_tables::make_update_view_mutations(std::move(keyspace), old_view, std::move(view), api::new_timestamp());
+        return announce(std::move(mutations), announce_locally);
+    } catch (const std::out_of_range& e) {
+        throw exceptions::configuration_exception(sprint("Cannot update non existing materialized view '%s' in keyspace '%s'.",
+                                                         view->cf_name(), view->ks_name()));
+    }
+}
+
 #if 0
 public static void announceFunctionDrop(UDFunction udf, boolean announceLocally)
 {
