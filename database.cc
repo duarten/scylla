@@ -3389,3 +3389,18 @@ void column_family::set_schema(schema_ptr s) {
     set_compaction_strategy(_schema->compaction_strategy());
     trigger_compaction();
 }
+
+void column_family::add_or_update_view(schema_ptr v) {
+    auto e = _views.emplace(v->cf_name(), v);
+    if (!e.second) {
+        e.first->second.update(v);
+    }
+}
+
+void column_family::remove_view(schema_ptr v) {
+    _views.erase(v->cf_name());
+}
+
+std::vector<schema_ptr> column_family::views() const {
+    return boost::copy_range<std::vector<schema_ptr>>(_views | boost::adaptors::map_values | boost::adaptors::transformed(std::mem_fn(&db::view::view::schema)));
+}

@@ -74,6 +74,7 @@
 #include <seastar/core/shared_future.hh>
 #include "tracing/trace_state.hh"
 #include <boost/intrusive/parent_from_member.hpp>
+#include "db/view/view.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -476,6 +477,7 @@ private:
     // Last but not least, we seldom need to guarantee any ordering here: as long
     // as all data is waited for, we're good.
     seastar::gate _streaming_flush_gate;
+    std::unordered_map<sstring, db::view::view> _views;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
@@ -755,6 +757,10 @@ public:
             }
         });
     }
+
+    void add_or_update_view(schema_ptr v);
+    void remove_view(schema_ptr v);
+    std::vector<schema_ptr> views() const;
 private:
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
