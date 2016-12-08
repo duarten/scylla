@@ -2247,6 +2247,16 @@ void keyspace_metadata::validate() const {
     abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), ss.get_token_metadata(), strategy_options());
 }
 
+std::vector<schema_ptr> keyspace_metadata::tables() const {
+    return boost::copy_range<std::vector<schema_ptr>>(_cf_meta_data | boost::adaptors::map_values | boost::adaptors::filtered([] (auto&& s) {
+        return !s->is_view();
+    }));
+}
+
+std::vector<schema_ptr> keyspace_metadata::views() const {
+    return boost::copy_range<std::vector<schema_ptr>>(_cf_meta_data | boost::adaptors::map_values | boost::adaptors::filtered(std::mem_fn(&schema::is_view)));
+}
+
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
     try {
         return find_schema(find_uuid(ks_name, cf_name));
