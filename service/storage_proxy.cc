@@ -2231,7 +2231,8 @@ protected:
                 // So in particular, if no host returned count live columns, we know it's not a short read.
                 if (rr_opt && (data_resolver->max_live_count() < cmd->row_limit || rr_opt->row_count() >= original_row_limit())
                         && !data_resolver->any_partition_short_read()) {
-                    auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice)));
+                    auto result = ::make_foreign(::make_lw_shared(
+                            to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->row_limit, cmd->partition_limit)));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
