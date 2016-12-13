@@ -1685,7 +1685,7 @@ public:
     // Requires that cr.has_any_live_data()
     stop_iteration consume(clustering_row&& cr, tombstone current_tombstone);
     stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
-    uint32_t consume_end_of_stream();
+    void consume_end_of_stream();
 };
 
 mutation_querier::mutation_querier(const schema& s, query::result::partition_writer& pw)
@@ -1755,7 +1755,7 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, tombstone current_
     return stop_iteration::no;
 }
 
-uint32_t mutation_querier::consume_end_of_stream() {
+void mutation_querier::consume_end_of_stream() {
     prepare_writers();
 
     // If we got no rows, but have live static columns, we should only
@@ -1766,17 +1766,15 @@ uint32_t mutation_querier::consume_end_of_stream() {
     if (!_live_clustering_rows
         && (has_ck_selector(_pw.ranges()) || !_live_data_in_static_row)) {
         _pw.retract();
-        return 0;
     } else {
+        _pw.row_count() += std::max(_live_clustering_rows, uint32_t(1));
+        _pw.partition_count() += 1;
         std::move(*_rows_wr).end_rows().end_qr_partition();
-        return std::max(_live_clustering_rows, uint32_t(1));
     }
 }
 
 class query_result_builder {
     const schema& _schema;
-    uint32_t _live_rows = 0;
-    uint32_t _partitions = 0;
     query::result::builder& _rb;
     stdx::optional<query::result::partition_writer> _pw;
     stdx::optional<mutation_querier> _mutation_consumer;
@@ -1803,13 +1801,11 @@ public:
     }
 
     void consume_end_of_partition() {
-        auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        _live_rows += live_rows_in_partition;
-        _partitions += live_rows_in_partition > 0;
+        _mutation_consumer->consume_end_of_stream();
     }
 
     data_query_result consume_end_of_stream() {
-        return {_live_rows, _partitions};
+        return {_rb.row_count(), _rb.partition_count()};
     }
 };
 
