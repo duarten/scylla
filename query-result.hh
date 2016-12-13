@@ -98,6 +98,7 @@ class result {
     stdx::optional<result_digest> _digest;
     stdx::optional<uint32_t> _row_count;
     api::timestamp_type _last_modified = api::missing_timestamp;
+    stdx::optional<uint32_t> _partition_count;
 
 public:
     class builder;
@@ -105,10 +106,18 @@ public:
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _row_count(c) {
+    result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}, stdx::optional<uint32_t> pc = {})
+            : _w(std::move(w))
+            , _row_count(c)
+            , _partition_count(pc) {
         w.reduce_chunk_count();
     }
-    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c), _last_modified(last_modified) {
+    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, stdx::optional<uint32_t> c = {}, stdx::optional<uint32_t> pc = {})
+            : _w(std::move(w))
+            , _digest(d)
+            , _row_count(c)
+            , _last_modified(last_modified)
+            , _partition_count(pc) {
         w.reduce_chunk_count();
     }
     result(result&&) = default;
@@ -130,6 +139,10 @@ public:
 
     const api::timestamp_type last_modified() const {
         return _last_modified;
+    }
+
+    const stdx::optional<uint32_t>& partition_count() const {
+        return _partition_count;
     }
 
     uint32_t calculate_row_count(const query::partition_slice&);
