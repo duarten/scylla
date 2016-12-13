@@ -159,14 +159,17 @@ std::ostream& operator<<(std::ostream& os, const query::result::printer& p) {
     return os;
 }
 
-uint32_t result::calculate_row_count(const query::partition_slice& slice) {
+void result::calculate_counts(const query::partition_slice& slice) {
     struct {
         uint32_t total_count = 0;
+        uint32_t previous_count = 0;
         uint32_t current_partition_count = 0;
+        uint32_t live_partitions = 0;
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
             accept_new_partition(row_count);
         }
         void accept_new_partition(uint32_t row_count) {
+            previous_count = total_count;
             total_count += row_count;
             current_partition_count = row_count;
         }
@@ -176,11 +179,13 @@ uint32_t result::calculate_row_count(const query::partition_slice& slice) {
             if (current_partition_count == 0) {
                 total_count++;
             }
+            live_partitions += (total_count > previous_count);
         }
     } counter;
 
     result_view::consume(*this, slice, counter);
-    return counter.total_count;
+    _row_count = counter.total_count;
+    _partition_count = counter.live_partitions;
 }
 
 result::result()
