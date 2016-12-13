@@ -150,8 +150,6 @@ public:
 
     void reverse();
 
-    void trim(size_t limit);
-
     template<typename RowComparator>
     void sort(RowComparator&& cmp) {
         std::sort(_rows.begin(), _rows.end(), std::forward<RowComparator>(cmp));

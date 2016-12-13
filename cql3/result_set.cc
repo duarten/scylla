@@ -160,12 +160,6 @@ void result_set::reverse() {
     std::reverse(_rows.begin(), _rows.end());
 }
 
-void result_set::trim(size_t limit) {
-    if (_rows.size() > limit) {
-        _rows.resize(limit);
-    }
-}
-
 metadata& result_set::get_metadata() {
     return *_metadata;
 }
