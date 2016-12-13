@@ -211,8 +211,14 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
         result_view::do_with(*r, [&] (result_view rv) {
             for (auto&& pv : rv._v.partitions()) {
                 partitions.add(pv);
+                if (!--_max_partitions) {
+                    return;
+                }
             }
         });
+        if (!_max_partitions) {
+            break;
+        }
     }
 
     std::move(partitions).end_partitions().end_query_result();
