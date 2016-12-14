@@ -997,3 +997,11 @@ std::ostream& operator<<(std::ostream& os, const view_info& view) {
     os << "}";
     return os;
 }
+
+bool operator==(const view_ptr& x, const view_ptr& y) {
+    return *x == *y;
+}
+
+std::ostream& operator<<(std::ostream& os, const view_ptr& view) {
+    return os << *view;
+}
