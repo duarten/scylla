@@ -341,7 +341,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
 
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto prs) {
-            query::result_merger merger(command->row_limit * pr.size(), command->partition_limit);
+            query::result_merger merger(command->row_limit * prs.size(), command->partition_limit);
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
                 std::vector<query::partition_range> prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
