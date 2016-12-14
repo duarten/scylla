@@ -2773,6 +2773,8 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
         if (i == ranges.end() || total_row_count >= cmd->row_limit || total_partition_count >= cmd->partition_limit) {
             return make_ready_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(results));
         } else {
+            cmd->row_limit -= total_row_count;
+            cmd->partition_limit -= total_partition_count;
             return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i),
                     std::move(ranges), concurrency_factor, std::move(trace_state), total_row_count, total_partition_count);
         }
