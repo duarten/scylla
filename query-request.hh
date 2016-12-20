@@ -124,6 +124,23 @@ public:
     partition_slice(partition_slice&&);
     ~partition_slice();
 
+    partition_slice& operator=(const partition_slice& other) {
+        if (this != &other) {
+            auto tmp = other;
+            this->~partition_slice();
+            new (this) partition_slice(std::move(tmp));
+        }
+        return *this;
+    }
+
+    partition_slice& operator=(partition_slice&& other) noexcept {
+        if (this != &other) {
+            this->~partition_slice();
+            new (this) partition_slice(std::move(other));
+        }
+        return *this;
+    }
+
     const clustering_row_ranges& row_ranges(const schema&, const partition_key&) const;
     void set_range(const schema&, const partition_key&, clustering_row_ranges);
     void clear_range(const schema&, const partition_key&);
