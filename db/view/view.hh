@@ -22,6 +22,7 @@
 #pragma once
 
 #include "dht/i_partitioner.hh"
+#include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema.hh"
 #include "stdx.hh"
@@ -80,6 +81,20 @@ public:
      */
     bool may_be_affected_by(const ::schema& base, const dht::decorated_key& key, const rows_entry& update) const;
 
+    /**
+     * Whether a given base row matches the view filter (and thus if the view should have a corresponding entry).
+     *
+     * Note that this differs from may_be_affected_by in that the provide row must be the current
+     * state of the base row, not just some updates to it. This function also has no false positive: a base
+     * row either does or doesn't match the view filter.
+     *
+     * @param base the base table schema.
+     * @param key the partition key that is updated.
+     * @param update the current state of a particular base row.
+     * @param now the current time in seconds (to decide what is live and what isn't).
+     * @return whether the base row matches the view filter.
+     */
+    bool matches_view_filter(const ::schema& base, const partition_key& key, const clustering_row& update, gc_clock::time_point now) const;
 private:
     shared_ptr<cql3::statements::select_statement> select_statement() const;
     const query::partition_slice& partition_slice() const;
