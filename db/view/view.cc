@@ -145,6 +145,35 @@ void view::set_base_non_pk_column_in_view_pk() {
     _base_non_pk_column_in_view_pk = nullptr;
 }
 
+class tombstone_tracker final {
+    bound_view::compare _cmp;
+    tombstone  _partition_tombstone;
+    stdx::optional<range_tombstone> _current_range_tombstone;
+public:
+    explicit tombstone_tracker(const schema& s, tombstone partition_tombstone)
+            : _cmp(s)
+            , _partition_tombstone(std::move(partition_tombstone)) {
+    }
+
+    tombstone current_tombstone() const {
+        return _current_range_tombstone ? _current_range_tombstone->tomb : _partition_tombstone;
+    }
+
+    void apply(range_tombstone&& rt) {
+        _current_range_tombstone = std::move(rt);
+        _current_range_tombstone->tomb.apply(_partition_tombstone);
+    }
+
+    // The rows passed to apply_to() must be in clustering order.
+    void apply_to(clustering_row& row) {
+        if (_cmp(row.key(), _current_range_tombstone->end_bound())) {
+            row.apply(_current_range_tombstone->tomb);
+        } else {
+            _current_range_tombstone = {};
+        }
+    }
+};
+
 } // namespace view
 } // namespace db
 
