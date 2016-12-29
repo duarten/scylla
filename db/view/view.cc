@@ -47,6 +47,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/util.hh"
 #include "db/view/view.hh"
+#include "db/view/view_update_builder.hh"
 
 namespace db {
 
@@ -143,6 +144,24 @@ void view::set_base_non_pk_column_in_view_pk() {
         }
     }
     _base_non_pk_column_in_view_pk = nullptr;
+}
+
+void tombstone_tracker::apply(range_tombstone&& rt) {
+    _current_range_tombstone = std::move(rt);
+    _current_range_tombstone->tomb.apply(_partition_tombstone);
+}
+
+tombstone tombstone_tracker::current_tombstone() const {
+    return _current_range_tombstone ? _current_range_tombstone->tomb : _partition_tombstone;
+}
+
+// The rows passed to apply_to() must be in clustering order.
+void tombstone_tracker::apply_to(clustering_row& row) {
+    if (_cmp(row.key(), _current_range_tombstone->end_bound())) {
+        row.apply(_current_range_tombstone->tomb);
+    } else {
+        _current_range_tombstone = {};
+    }
 }
 
 } // namespace view
