@@ -76,6 +76,63 @@ private:
     }
 };
 
+class view_update_builder final {
+    struct impl {
+        schema_ptr _schema; // The base schema
+        std::vector<view_updates> _view_updates;
+        streamed_mutation _updates;
+        streamed_mutation _existings;
+        tombstone_tracker _update_tombstone_tracker;
+        tombstone_tracker _existing_tombstone_tracker;
+        mutation_fragment_opt _update;
+        mutation_fragment_opt _existing;
+        gc_clock::time_point _now;
+
+        impl(schema_ptr s,
+            std::vector<view_updates>&& views_to_update,
+            streamed_mutation&& updates,
+            streamed_mutation&& existings)
+                : _schema(std::move(s))
+                , _view_updates(std::move(views_to_update))
+                , _updates(std::move(updates))
+                , _existings(std::move(existings))
+                , _update_tombstone_tracker(*_schema, _updates.partition_tombstone())
+                , _existing_tombstone_tracker(*_schema, _existings.partition_tombstone())
+                , _now(gc_clock::now()) {
+        }
+
+        future<std::vector<mutation>> build();
+
+        future<stop_iteration> on_results();
+
+        future<stop_iteration> advance_all();
+
+        future<stop_iteration> advance_updates();
+
+        future<stop_iteration> advance_existings();
+
+        future<stop_iteration> stop() const;
+
+        void generate_update(clustering_row&& update, stdx::optional<clustering_row>&& existing);
+    };
+
+    std::unique_ptr<impl> _impl;
+public:
+    explicit view_update_builder(const schema_ptr& base,
+                    std::vector<lw_shared_ptr<view>>&& views_to_update,
+                    streamed_mutation&& updates,
+                    streamed_mutation&& existings)
+            : _impl(std::make_unique<impl>(base,
+                        boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (auto&& v) {
+                            return view_updates(std::move(v), base);
+                        })),
+                        std::move(updates),
+                        std::move(existings))) {
+    }
+
+    future<std::vector<mutation>> build() &&;
+};
+
 }
 
 }

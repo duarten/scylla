@@ -412,6 +412,145 @@ void view_updates::generate_update(
     }
 }
 
+future<std::vector<mutation>> view_update_builder::impl::build() {
+    return advance_all().then([this] (auto&& ignored) {
+        return repeat([this] {
+            return this->on_results();
+        });
+    }).then([this] {
+        std::vector<mutation> mutations;
+        for (auto&& update : _view_updates) {
+            std::move(update).move_to(mutations);
+        }
+        return mutations;
+    });
+}
+
+void view_update_builder::impl::generate_update(clustering_row&& update, stdx::optional<clustering_row>&& existing) {
+    // If we have no update at all, we shouldn't get there.
+    if (update.empty()) {
+        throw std::logic_error("Empty materialized view updated");
+    }
+
+    auto gc_before = _now - _schema->gc_grace_seconds();
+
+    // We allow existing to be disengaged, which we treat the same as an empty row.
+    if (existing) {
+        existing->marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
+        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, tombstone(), _now, always_gc, gc_before);
+        update.apply(*_schema, *existing);
+    }
+
+    update.marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
+    update.cells().compact_and_expire(*_schema, column_kind::regular_column, tombstone(), _now, always_gc, gc_before);
+
+    for (auto&& v : _view_updates) {
+        v.generate_update(_updates.key(), update, existing, _now);
+    }
+}
+
+future<stop_iteration> view_update_builder::impl::on_results() {
+    if (_update && _existing) {
+        int cmp = position_in_partition::tri_compare(*_schema)(_update->position(), _existing->position());
+        if (cmp < 0) {
+            // We have an update where there was nothing before
+            if (_update->is_range_tombstone()) {
+                _update_tombstone_tracker.apply(std::move(_update->as_range_tombstone()));
+            } else {
+                auto& update = _update->as_clustering_row();
+                _update_tombstone_tracker.apply_to(update);
+                auto tombstone = _existing_tombstone_tracker.current_tombstone();
+                auto existing = tombstone
+                              ? stdx::optional<clustering_row>(stdx::in_place, update.key(), std::move(tombstone), row_marker(), ::row())
+                              : stdx::nullopt;
+                generate_update(std::move(update), std::move(existing));
+            }
+            return advance_updates();
+        }
+        if (cmp < 0) {
+            // We have something existing but no update (which will happen either because it's a range tombstone marker in
+            // existing, or because we've fetched the existing row due to some partition/range deletion in the updates)
+            if (_existing->is_range_tombstone()) {
+                _existing_tombstone_tracker.apply(std::move(_existing->as_range_tombstone()));
+            } else {
+                auto& existing = _existing->as_clustering_row();
+                _existing_tombstone_tracker.apply_to(existing);
+                auto tombstone = _update_tombstone_tracker.current_tombstone();
+                // The way we build the read command used for existing rows, we should always have a non-empty
+                // tombstone, since we wouldn't have read the existing row otherwise. We don't assert that in case the
+                // read method ever changes.
+                if (tombstone) {
+                    auto update = clustering_row(existing.key(), std::move(tombstone), row_marker(), ::row());
+                    generate_update(std::move(update), { std::move(existing) });
+                }
+            }
+            return advance_existings();
+        }
+        // We're updating a row that had pre-existing data
+        if (_update->is_range_tombstone()) {
+            assert(_existing->is_range_tombstone());
+            _existing_tombstone_tracker.apply(std::move(_existing->as_range_tombstone()));
+            _update_tombstone_tracker.apply(std::move(_update->as_range_tombstone()));
+        } else {
+            assert(!_existing->is_range_tombstone());
+            _update_tombstone_tracker.apply_to(_update->as_clustering_row());
+            _existing_tombstone_tracker.apply_to(_existing->as_clustering_row());
+            generate_update(std::move(_update->as_clustering_row()), { std::move(_existing->as_clustering_row()) });
+        }
+        return advance_all();
+    }
+
+    auto tombstone = _update_tombstone_tracker.current_tombstone();
+    if (tombstone && _existing) {
+        // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
+        if (!_existing->is_range_tombstone()) {
+            auto& existing = _existing->as_clustering_row();
+            auto update = clustering_row(existing.key(), std::move(tombstone), row_marker(), ::row());
+            generate_update(std::move(update), { std::move(existing) });
+        }
+        return advance_existings();
+    }
+
+    // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
+    if (_update && !_update->is_range_tombstone()) {
+        generate_update(std::move(_update->as_clustering_row()), { });
+        return advance_updates();
+    }
+
+    return stop();
+}
+
+future<stop_iteration> view_update_builder::impl::advance_all() {
+    return when_all(_updates(), _existings()).then([this] (auto&& fragments) mutable {
+        _update = std::move(std::get<mutation_fragment_opt>(std::get<0>(fragments).get()));
+        _existing = std::move(std::get<mutation_fragment_opt>(std::get<1>(fragments).get()));
+        return stop_iteration::no;
+    });
+}
+
+future<stop_iteration> view_update_builder::impl::advance_updates() {
+    return _updates().then([this] (auto&& update) mutable {
+        _update = std::move(update);
+        return stop_iteration::no;
+    });
+}
+
+future<stop_iteration> view_update_builder::impl::advance_existings() {
+    return _existings().then([this] (auto&& existing) mutable {
+        _existing = std::move(existing);
+        return stop_iteration::no;
+    });
+}
+
+future<stop_iteration> view_update_builder::impl::stop() const {
+    return make_ready_future<stop_iteration>(stop_iteration::yes);
+}
+
+future<std::vector<mutation>> view_update_builder::build() && {
+    auto f = _impl->build();
+    return f.finally([impl = std::move(_impl)] { });
+}
+
 } // namespace view
 } // namespace db
 
