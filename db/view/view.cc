@@ -393,6 +393,7 @@ void view_updates::generate_update(
         auto* before = existing->cells().find_cell(col_id);
         if (before) {
             if (after) {
+                // Note: multi-cell columns can't be part of the primary key.
                 auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(), after->as_atomic_cell());
                 if (cmp == 0) {
                     replace_entry(base_key, update, *existing, now);

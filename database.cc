@@ -65,6 +65,7 @@
 #include "utils/flush_queue.hh"
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
+#include "db/view/view_update_builder.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -3567,4 +3568,24 @@ std::vector<lw_shared_ptr<db::view::view>> column_family::affected_views(const m
             | boost::adaptors::filtered([&, this] (auto&& view) {
         return view->partition_key_matches(*_schema, update.decorated_key());
     }));
+}
+
+/**
+ * Given some updates on the base table and the existing values for the rows affected by that update, generates the
+ * mutations to be applied to the base table's views.
+ *
+ * @param updates the base table updates being applied.
+ * @param existings the existing values for the rows affected by updates. This is used to decide if a view is
+ * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
+ * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
+ * but has simply some updated values.
+ * @return a future resolving to the mutations to apply to the views, which can be empty.
+ */
+future<std::vector<mutation>> column_family::generate_view_updates(const schema_ptr& base,
+        std::vector<lw_shared_ptr<db::view::view>>&& views,
+        streamed_mutation updates,
+        streamed_mutation existings) const {
+    //FIXME: Use the view_ptr which corresponds to the version of base. The current code
+    // just uses the most recent view_ptr, which is not correct.
+    return db::view::view_update_builder(base, std::move(views), std::move(updates), std::move(existings)).build();
 }
