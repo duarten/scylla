@@ -793,6 +793,11 @@ column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring di
     });
 }
 
+static std::vector<unsigned>& unshared() {
+    static thread_local std::vector<unsigned> shards({ engine().cpu_id() });
+    return shards;
+}
+
 void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
     auto shards = sst->get_shards_for_this_sstable();
     if (belongs_to_other_shard(shards)) {
@@ -814,7 +819,7 @@ void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level
         // the sstables to level 0.
         sst->set_sstable_level(0);
     }
-    add_sstable(sst);
+    add_sstable(sst, shards);
 }
 
 // load_sstable() wants to start rewriting sstables which are shared between
@@ -834,20 +839,24 @@ void column_family::start_rewrite() {
     _sstables_need_rewrite.clear();
 }
 
-void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) {
-    _stats.live_disk_space_used += disk_space_used_by_sstable;
-    _stats.total_disk_space_used += disk_space_used_by_sstable;
-    _stats.live_sstable_count++;
+void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>& shards_for_the_sstable) {
+    assert(!shards_for_the_sstable.empty());
+    std::sort(shards_for_the_sstable);
+    if (shards_for_the_sstable.front() == engine().cpu_id()) {
+        _stats.live_disk_space_used += disk_space_used_by_sstable;
+        _stats.total_disk_space_used += disk_space_used_by_sstable;
+        _stats.live_sstable_count++;
+    }
 }
 
 void column_family::add_sstable(sstables::sstable&& sstable) {
     add_sstable(make_lw_shared(std::move(sstable)));
 }
 
-void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
+void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>& shards_for_the_sstable) {
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared(*_sstables);
-    update_stats_for_new_sstable(sstable->bytes_on_disk());
+    update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
     _sstables->insert(std::move(sstable));
 }
 
@@ -931,7 +940,7 @@ column_family::seal_active_streaming_memtable_immediate() {
             return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
                 return newtab->open_data();
             }).then([this, old, newtab] () {
-                add_sstable(newtab);
+                add_sstable(newtab, unshared());
                 trigger_compaction();
             }).handle_exception([] (auto ep) {
                 dblog.error("failed to write streamed sstable: {}", ep);
@@ -1058,7 +1067,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
                 // We must add sstable before we call update_cache(), because
                 // memtable's data after moving to cache can be evicted at any time.
                 auto old_sstables = _sstables;
-                add_sstable(newtab);
+                add_sstable(newtab, unshared());
                 old->mark_flushed(newtab);
 
                 trigger_compaction();
@@ -1228,7 +1237,8 @@ void column_family::rebuild_statistics() {
                     // making the two ranges compatible when compiling with boost 1.55.
                     // Noone is actually moving anything...
                                          std::move(*_sstables->all()))) {
-        update_stats_for_new_sstable(tab->data_size());
+        auto shards = tab->is_shared() ? tab->get_shards_for_this_sstable() : unshared();
+        update_stats_for_new_sstable(tab->data_size(), shards);
     }
 }
 
@@ -3386,7 +3396,8 @@ future<> column_family::flush_streaming_big_mutations(utils::UUID plan_id) {
             });
         }).then([this, entry] {
             for (auto&& sst : entry->sstables) {
-                add_sstable(sst);
+                // seal_active_streaming_memtable_big() ensures sst is unshared.
+                add_sstable(sst, unshared());
             }
             trigger_compaction();
         });
