@@ -63,6 +63,7 @@ public:
 
 private:
     mutation_partition& partition_for(partition_key&& key);
+    row_marker compute_row_marker(const clustering_row& base_row) const;
 };
 
 }
