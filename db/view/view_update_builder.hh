@@ -66,6 +66,8 @@ private:
     row_marker compute_row_marker(const clustering_row& base_row) const;
     deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
+    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now);
+    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now);
 };
 
 }
