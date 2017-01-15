@@ -64,6 +64,8 @@ public:
 private:
     mutation_partition& partition_for(partition_key&& key);
     row_marker compute_row_marker(const clustering_row& base_row) const;
+    deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
+    void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
 };
 
 }
