@@ -48,6 +48,23 @@ public:
     void apply_to(clustering_row& row);
 };
 
+class view_updates final {
+    lw_shared_ptr<const db::view::view> _view;
+    schema_ptr _base;
+    std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
+public:
+    explicit view_updates(lw_shared_ptr<const db::view::view> view, schema_ptr base)
+            : _view(std::move(view))
+            , _base(base)
+            , _updates(8, partition_key::hashing(*_base), partition_key::equality(*_base)) {
+    }
+
+    void move_to(std::vector<mutation>& mutations) &&;
+
+private:
+    mutation_partition& partition_for(partition_key&& key);
+};
+
 }
 
 }

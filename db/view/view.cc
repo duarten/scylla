@@ -164,6 +164,21 @@ void tombstone_tracker::apply_to(clustering_row& row) {
     }
 }
 
+void view_updates::move_to(std::vector<mutation>& mutations) && {
+    auto& partitioner = dht::global_partitioner();
+    std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
+        return mutation(_view->schema(), partitioner.decorate_key(*_base, std::move(m.first)), std::move(m.second));
+    });
+}
+
+mutation_partition& view_updates::partition_for(partition_key&& key) {
+    auto it = _updates.find(key);
+    if (it != _updates.end()) {
+        return it->second;
+    }
+    return _updates.emplace(std::move(key), mutation_partition(_view->schema())).first->second;
+}
+
 } // namespace view
 } // namespace db
 
