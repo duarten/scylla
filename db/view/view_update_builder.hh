@@ -61,6 +61,7 @@ public:
 
     void move_to(std::vector<mutation>& mutations) &&;
 
+    void generate_update(const partition_key& base_key, const clustering_row& update, const stdx::optional<clustering_row>& existing, gc_clock::time_point now);
 private:
     mutation_partition& partition_for(partition_key&& key);
     row_marker compute_row_marker(const clustering_row& base_row) const;
