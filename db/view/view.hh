@@ -110,6 +110,9 @@ private:
     void set_base_non_pk_column_in_view_pk();
 };
 
+void mutate_MV(const dht::token& base_token,
+        std::vector<mutation> mutations);
+
 }
 
 }
