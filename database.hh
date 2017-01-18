@@ -811,6 +811,7 @@ private:
             std::vector<lw_shared_ptr<db::view::view>>&& views,
             streamed_mutation updates,
             streamed_mutation existings) const;
+    future<> push_view_replica_updates(const schema_ptr& base, mutation&& m) const;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
