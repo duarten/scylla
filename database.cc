@@ -2787,15 +2787,27 @@ void dirty_memory_manager::start_reclaiming() {
     _should_flush.signal();
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
-        try {
-            auto& cf = find_column_family(m.column_family_id());
-            cf.apply(m, m_schema, rp);
-        } catch (no_such_column_family&) {
-            dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
-        }
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, m_schema = std::move(m_schema), rp = std::move(rp)] {
+        cf.apply(m, m_schema, rp);
     }, timeout);
+}
+
+future<> database::apply_with_views(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp, timeout_clock::time_point timeout) {
+    try {
+        auto& cf = find_column_family(m.column_family_id());
+        if (cf.views().empty()) {
+            return apply_in_memory(m, std::move(m_schema), cf, std::move(rp), std::move(timeout));
+        }
+        //FIXME: Avoid unfreezing here.
+        auto f = cf.push_view_replica_updates(m_schema, m.unfreeze(m_schema));
+        return f.then([this, &m, &cf, m_schema = std::move(m_schema), rp = std::move(rp), timeout = std::move(timeout)] {
+            return apply_in_memory(m, std::move(m_schema), cf, std::move(rp), std::move(timeout));
+        });
+    } catch (no_such_column_family&) {
+        dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
+        throw;
+    }
 }
 
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
@@ -2811,7 +2823,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
     if (cf.commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
         return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout](auto rp) {
-            return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
+            return this->apply_with_views(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -2826,7 +2838,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
             });
         });
     }
-    return apply_in_memory(m, s, db::replay_position(), timeout);
+    return apply_with_views(m, s, db::replay_position(), timeout);
 }
 
 future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {

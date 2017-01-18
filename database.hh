@@ -1102,7 +1102,8 @@ private:
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
+    future<> apply_with_views(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout);
 
 private:
     // Unless you are an earlier boostraper or the database itself, you should
