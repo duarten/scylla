@@ -2652,6 +2652,8 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     if (lc.is_start()) {
         _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
     }
+    //FIXME: Avoid unfreezing here.
+    push_view_replica_updates(m_schema, m.unfreeze(m_schema));
 }
 
 void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
