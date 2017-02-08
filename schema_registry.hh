@@ -77,6 +77,8 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     promise<> _synced_promise; // valid when _sync_state == SYNCING
     shared_future<> _synced_future; // valid when _sync_state == SYNCING
 
+    std::unordered_map<utils::UUID, table_schema_version> _views;
+
     friend class schema_registry;
 public:
     schema_registry_entry(table_schema_version v, schema_registry& r);
@@ -99,6 +101,8 @@ public:
 public:
     // Called by class schema
     void detach_schema() noexcept;
+private:
+    void register_view(const view_ptr&);
 };
 
 //
@@ -110,8 +114,10 @@ public:
 //
 class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
+    std::unordered_map<utils::UUID, table_schema_version> _latest;
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
+    void add_entry(const schema_ptr&, lw_shared_ptr<schema_registry_entry>, const std::vector<view_ptr>&);
 public:
     // Looks up schema by version or loads it using supplied loader.
     schema_ptr get_or_load(table_schema_version, const schema_loader&);
@@ -138,8 +144,10 @@ public:
     // the schema which was passed as argument. Users should prefer to use the
     // schema_ptr returned by this method instead of the one passed to it,
     // because doing so ensures that the entry will be kept in the registry as
-    // long as the schema is actively used.
-    schema_ptr learn(const schema_ptr&);
+    // long as the schema is actively used. Associates already learned view
+    // schemas with the specified one, so they can be loaded and sent to a
+    // remote node as a single unit, for write operations.
+    schema_ptr learn(const schema_ptr&, const std::vector<view_ptr>&);
 };
 
 schema_registry& local_schema_registry();

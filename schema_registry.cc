@@ -50,7 +50,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     , _sync_state(sync_state::NOT_SYNCED)
 { }
 
-schema_ptr schema_registry::learn(const schema_ptr& s) {
+schema_ptr schema_registry::learn(const schema_ptr& s, const std::vector<view_ptr>& views) {
     if (s->registry_entry()) {
         return std::move(s);
     }
@@ -61,7 +61,7 @@ schema_ptr schema_registry::learn(const schema_ptr& s) {
     logger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
     auto loaded_s = e_ptr->load(frozen_schema(s));
-    _entries.emplace(s->version(), e_ptr);
+    add_entry(s, std::move(e_ptr), views);
     return loaded_s;
 }
 
@@ -75,6 +75,18 @@ schema_registry_entry& schema_registry::get_entry(table_schema_version v) const 
         throw schema_version_not_found(v);
     }
     return e;
+}
+
+void schema_registry::add_entry(const schema_ptr& schema, lw_shared_ptr<schema_registry_entry> entry, const std::vector<view_ptr>& views) {
+    _entries.emplace(schema->version(), std::move(entry));
+    _latest[schema->id()] = schema->version();
+    if (schema->is_view()) {
+        _entries[_latest[schema->view_info()->base_id()]]->register_view(view_ptr(schema));
+    } else {
+        for (auto& v : views) {
+            entry->register_view(v);
+        }
+    }
 }
 
 schema_ptr schema_registry::get(table_schema_version v) const {
@@ -242,6 +254,10 @@ void schema_registry_entry::mark_synced() {
     }
     _sync_state = sync_state::SYNCED;
     logger.debug("Marked {} as synced", _version);
+}
+
+void schema_registry_entry::register_view(const view_ptr& v) {
+    _views[v->id()] = v->version();
 }
 
 schema_registry& local_schema_registry() {
