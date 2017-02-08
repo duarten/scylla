@@ -58,3 +58,25 @@ bytes_view frozen_schema::representation() const
 {
     return _data;
 }
+
+frozen_schema_and_views::frozen_schema_and_views(frozen_schema schema, std::vector<frozen_schema> views)
+        : _schema(std::move(schema))
+        , _views(std::move(views)) {
+}
+
+const frozen_schema& frozen_schema_and_views::schema() const & {
+    return _schema;
+}
+
+const std::vector<frozen_schema>& frozen_schema_and_views::views() const & {
+    return _views;
+}
+
+frozen_schema frozen_schema_and_views::schema() && {
+    return std::move(_schema);
+}
+
+std::vector<frozen_schema> frozen_schema_and_views::views() && {
+    return std::move(_views);
+}
+
