@@ -48,6 +48,12 @@
 #include "service/migration_task.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 namespace service {
 
@@ -877,8 +883,24 @@ future<schema_ptr> get_schema_for_read(table_schema_version v, net::messaging_se
 }
 
 future<schema_ptr> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
-        return maybe_sync(s, dst).then([s] {
+    return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
+        logger.debug("Requesting schema {} and views from {}", v, dst);
+        auto& ms = net::get_local_messaging_service();
+        return ms.send_get_schema_version(dst, v).then([dst] (frozen_schema_and_views fsav) {
+            return parallel_for_each(std::move(fsav).views(), [dst] (frozen_schema& frozen_view) {
+                auto in = ser::as_input_stream(frozen_view.representation());
+                auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
+                auto version = sv.version();
+                auto view = local_schema_registry().get_or_load(version, [&frozen_view] (table_schema_version) {
+                    return std::move(frozen_view);
+                });
+                return maybe_sync(std::move(view), dst);
+            }).then([fs = std::move(fsav).schema()] {
+                return std::move(fs);
+            });
+        });
+    }).then([dst] (auto&& s) {
+        return maybe_sync(s, std::move(dst)).then([s] {
             return s;
         });
     });
