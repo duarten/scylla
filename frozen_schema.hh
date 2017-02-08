@@ -39,3 +39,18 @@ public:
     schema_ptr unfreeze() const;
     bytes_view representation() const;
 };
+
+class frozen_schema_and_views final {
+    frozen_schema _schema;
+    std::vector<frozen_schema> _views;
+public:
+    explicit frozen_schema_and_views(frozen_schema schema, std::vector<frozen_schema> views);
+    frozen_schema_and_views(frozen_schema_and_views&&) = default;
+    frozen_schema_and_views(const frozen_schema_and_views&) = default;
+    frozen_schema_and_views& operator=(const frozen_schema_and_views&) = default;
+    frozen_schema_and_views& operator=(frozen_schema_and_views&&) = default;
+    const frozen_schema& schema() const &;
+    const std::vector<frozen_schema>& views() const &;
+    frozen_schema schema() &&;
+    std::vector<frozen_schema> views() &&;
+};
