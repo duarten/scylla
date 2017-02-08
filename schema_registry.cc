@@ -111,7 +111,7 @@ frozen_schema_and_views schema_registry::get_frozen(table_schema_version v) cons
     return frozen_schema_and_views(entry.frozen(), std::move(views));
 }
 
-future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
+future<schema_and_views> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
@@ -156,8 +156,6 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
 schema_ptr schema_registry_entry::load(frozen_schema&& fs, std::vector<frozen_schema>&& frozen_views) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();
-    std::vector<view_ptr> views;
-    views.reserve(views.size());
     for (auto& fv : frozen_views) {
         auto in = ser::as_input_stream(fv.representation());
         auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
@@ -165,7 +163,7 @@ schema_ptr schema_registry_entry::load(frozen_schema&& fs, std::vector<frozen_sc
         auto e_ptr = make_lw_shared<schema_registry_entry>(version, _registry);
         e_ptr->load(std::move(fv), { });
         _registry._entries.emplace(version, e_ptr);
-        views.push_back(view_ptr(e_ptr->get_schema()));
+        register_view(view_ptr(e_ptr->get_schema()));
     }
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
@@ -219,24 +217,26 @@ schema_ptr schema_registry_entry::get_schema() {
     }
 }
 
-std::vector<view_ptr> schema_registry_entry::get_views() {
-    std::vector<view_ptr> views;
-    views.reserve(_views.size());
-    for (auto&& p : _views) {
-        auto view_entry = _registry._entries.find(p.second);
-        if (view_entry != _registry._entries.end()) {
-            views.push_back(view_ptr(view_entry->second->get_schema()));
-        }
-    }
-    return views;
-}
-
 void schema_registry_entry::detach_schema() noexcept {
     logger.trace("Deactivating {}", _version);
+    auto id = _schema->id();
+    if (_schema->is_view()) {
+        try {
+            auto& entry = _registry._latest.at(_schema->view_info()->base_id());
+            auto v = entry._views.find(id);
+            if (v != entry._views.end() && v->second == _version) {
+                _entry._views.erase(v);
+            }
+        } catch (...) {
+            // Ignored, as the base might have already been removed.
+        }
+    }
     _schema = nullptr;
     // TODO: keep the entry for a while (timer)
     try {
         _registry._entries.erase(_version);
+        if (_registry._latest.at(id)->schema()->version() == _version) {
+        }
     } catch (...) {
         logger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
     }

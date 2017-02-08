@@ -3712,7 +3712,14 @@ void storage_proxy::init_messaging_service() {
     ms.register_get_schema_version([] (unsigned shard, table_schema_version v) {
         return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
             logger.debug("Schema version request for {}", v);
-            return local_schema_registry().get_frozen(v);
+            auto s = local_schema_registry().get(v);
+            auto& views = sp._db.local.views_of(s);
+            std::vector<frozen_schema> frozen_views;
+            frozen_views.reserve(views.size());
+            for (auto& view : views) {
+                frozen_views.push_back(view->registry_entry()->frozen());
+            }
+            return frozen_schema_and_views(s->registry_entry->frozen(), std::move(frozen_views));
         });
     });
 }

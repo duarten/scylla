@@ -3157,6 +3157,10 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
     });
 }
 
+const std::vector<view_ptr>& database::views_of(schema_ptr base) const {
+    return find_column_family(base).views();
+}
+
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy)
 {
     return db::schema_tables::calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {

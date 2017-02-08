@@ -43,6 +43,11 @@ public:
     schema_version_loading_failed(table_schema_version v);
 };
 
+struct schema_and_views {
+    schema_ptr schema;
+    std::vector<view_ptr> views;
+};
+
 //
 // Presence in schema_registry is controlled by different processes depending on
 // life cycle stage:
@@ -86,9 +91,8 @@ public:
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
     schema_ptr load(frozen_schema&&, std::vector<frozen_schema>&& frozen_views);
-    future<schema_ptr> start_loading(async_schema_loader);
+    future<schema_and_views> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
-    std::vector<view_ptr> get_views(); // call only when state >= LOADED
     // Can be called from other shards
     bool is_synced() const;
     // Initiates asynchronous schema sync or returns ready future when is already synced.
@@ -130,7 +134,7 @@ public:
     // deferring. The loader is copied must be alive only until this method
     // returns. If the loader fails, the future resolves with
     // schema_version_loading_failed.
-    future<schema_ptr> get_or_load(table_schema_version, const async_schema_loader&);
+    future<schema_and_views> get_or_load(table_schema_version, const async_schema_loader&);
 
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.
