@@ -30,7 +30,7 @@
 
 class schema_registry;
 
-using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
+using async_schema_loader = std::function<future<frozen_schema_and_views>(table_schema_version)>;
 using schema_loader = std::function<frozen_schema(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
@@ -85,9 +85,10 @@ public:
     schema_registry_entry(schema_registry_entry&&) = delete;
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
-    schema_ptr load(frozen_schema);
+    schema_ptr load(frozen_schema&&, std::vector<frozen_schema>&& frozen_views);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
+    std::vector<view_ptr> get_views(); // call only when state >= LOADED
     // Can be called from other shards
     bool is_synced() const;
     // Initiates asynchronous schema sync or returns ready future when is already synced.
@@ -137,7 +138,7 @@ public:
 
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.
-    frozen_schema get_frozen(table_schema_version) const;
+    frozen_schema_and_views get_frozen(table_schema_version) const;
 
     // Attempts to add given schema to the registry. If the registry already
     // knows about the schema, returns existing entry, otherwise returns back

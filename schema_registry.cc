@@ -23,7 +23,15 @@
 
 #include "schema_registry.hh"
 #include "log.hh"
-
+#include "frozen_schema.hh"
+#include "canonical_mutation.hh"
+#include "schema_mutations.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 static logging::logger logger("schema_registry");
 
@@ -60,7 +68,7 @@ schema_ptr schema_registry::learn(const schema_ptr& s, const std::vector<view_pt
     }
     logger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
-    auto loaded_s = e_ptr->load(frozen_schema(s));
+    auto loaded_s = e_ptr->load(frozen_schema(s), { });
     add_entry(s, std::move(e_ptr), views);
     return loaded_s;
 }
@@ -93,8 +101,14 @@ schema_ptr schema_registry::get(table_schema_version v) const {
     return get_entry(v).get_schema();
 }
 
-frozen_schema schema_registry::get_frozen(table_schema_version v) const {
-    return get_entry(v).frozen();
+frozen_schema_and_views schema_registry::get_frozen(table_schema_version v) const {
+    auto& entry = get_entry(v);
+    std::vector<frozen_schema> views;
+    views.reserve(entry._views.size());
+    for (auto&& v : entry._views) {
+        views.push_back(get_entry(v.second).frozen());
+    }
+    return frozen_schema_and_views(entry.frozen(), std::move(views));
 }
 
 future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
@@ -128,20 +142,31 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
-        auto s = e_ptr->load(loader(v));
+        auto s = e_ptr->load(loader(v), { });
         _entries.emplace(v, e_ptr);
         return s;
     }
     schema_registry_entry& e = *i->second;
     if (e._state == schema_registry_entry::state::LOADING) {
-        return e.load(loader(v));
+        return e.load(loader(v), { });
     }
     return e.get_schema();
 }
 
-schema_ptr schema_registry_entry::load(frozen_schema fs) {
+schema_ptr schema_registry_entry::load(frozen_schema&& fs, std::vector<frozen_schema>&& frozen_views) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();
+    std::vector<view_ptr> views;
+    views.reserve(views.size());
+    for (auto& fv : frozen_views) {
+        auto in = ser::as_input_stream(fv.representation());
+        auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
+        auto version = sv.version();
+        auto e_ptr = make_lw_shared<schema_registry_entry>(version, _registry);
+        e_ptr->load(std::move(fv), { });
+        _registry._entries.emplace(version, e_ptr);
+        views.push_back(view_ptr(e_ptr->get_schema()));
+    }
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
         _schema_promise = {};
@@ -157,7 +182,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     _schema_future = _schema_promise.get_future();
     _state = state::LOADING;
     logger.trace("Loading {}", _version);
-    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
+    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema_and_views>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             logger.trace("Loading of {} aborted", _version);
@@ -165,7 +190,8 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
         }
         try {
             try {
-                load(f.get0());
+                auto fsv = f.get0();
+                load(std::move(fsv).schema(), std::move(fsv).views());
             } catch (...) {
                 std::throw_with_nested(schema_version_loading_failed(_version));
             }
@@ -191,6 +217,18 @@ schema_ptr schema_registry_entry::get_schema() {
     } else {
         return _schema->shared_from_this();
     }
+}
+
+std::vector<view_ptr> schema_registry_entry::get_views() {
+    std::vector<view_ptr> views;
+    views.reserve(_views.size());
+    for (auto&& p : _views) {
+        auto view_entry = _registry._entries.find(p.second);
+        if (view_entry != _registry._entries.end()) {
+            views.push_back(view_ptr(view_entry->second->get_schema()));
+        }
+    }
+    return views;
 }
 
 void schema_registry_entry::detach_schema() noexcept {
