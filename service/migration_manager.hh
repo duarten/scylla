@@ -48,6 +48,7 @@
 #include "gms/inet_address.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
+#include "schema_registry.hh"
 
 #include <vector>
 

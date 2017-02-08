@@ -876,8 +876,13 @@ future<schema_ptr> get_schema_for_read(table_schema_version v, net::messaging_se
 
 future<schema_ptr> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
     return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
-        return maybe_sync(s, dst).then([s] {
-            return s;
+        auto views = s->registry_entry()->get_views();
+        return parallel_for_each(views.begin(), views.end(), [dst] (view_ptr& view) {
+            return maybe_sync(std::move(view), dst);
+        }).then([dst, s = std::move(s)] {
+            return maybe_sync(s, std::move(dst)).then([s] {
+                return s;
+            });
         });
     });
 }
