@@ -354,11 +354,10 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         break;
     }
 
-    auto f = service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, is_local_only);
-    return f.then([is_local_only, view_updates = std::move(view_updates)] {
-        return parallel_for_each(view_updates, [is_local_only] (auto&& view) {
-            return service::get_local_migration_manager().announce_view_update(view_ptr(std::move(view)), is_local_only);
-        });
+    return parallel_for_each(view_updates, [is_local_only] (auto&& view) {
+        return service::get_local_migration_manager().announce_view_update(view_ptr(std::move(view)), is_local_only);
+    }).then([is_local_only, schema = cfm.build()] {
+        return service::get_local_migration_manager().announce_column_family_update(std::move(schema), false, is_local_only);
     }).then([] {
         return true;
     });
