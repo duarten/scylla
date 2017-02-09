@@ -1267,6 +1267,8 @@ public:
         return _system_read_concurrency_sem;
     }
 
+    const std::vector<view_ptr>& views_of(schema_ptr base) const;
+
     friend class distributed_loader;
 };
 
