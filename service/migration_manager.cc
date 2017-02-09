@@ -866,7 +866,9 @@ future<schema_ptr> get_schema_definition(table_schema_version v, net::messaging_
     return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
         logger.debug("Requesting schema {} from {}", v, dst);
         auto& ms = net::get_local_messaging_service();
-        return ms.send_get_schema_version(dst, v);
+        return ms.send_get_schema_version(dst, v).then([] (frozen_schema_and_views fsav) {
+            return std::move(fsav).schema();
+        });
     });
 }
 

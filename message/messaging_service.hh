@@ -58,6 +58,7 @@ class seed_provider_type;
 
 class frozen_mutation;
 class frozen_schema;
+class frozen_schema_and_views;
 class partition_checksum;
 
 namespace dht {
@@ -310,9 +311,9 @@ public:
     future<query::result> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da);
 
     // Wrapper for GET_SCHEMA_VERSION
-    void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
+    void register_get_schema_version(std::function<future<frozen_schema_and_views>(unsigned, table_schema_version)>&& func);
     void unregister_get_schema_version();
-    future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
+    future<frozen_schema_and_views> send_get_schema_version(msg_addr, table_schema_version);
 
     // Wrapper for SCHEMA_CHECK
     void register_schema_check(std::function<future<utils::UUID>()>&& func);
