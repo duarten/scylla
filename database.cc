@@ -2187,7 +2187,9 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
     if (s->is_view()) {
         try {
-            find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
+            auto& cf = find_column_family(s->view_info()->base_id());
+            cf.remove_view(view_ptr(s));
+            local_schema_registry().unlearn_view(cf.schema(), view_ptr(s));
         } catch (no_such_column_family&) {
             // Drop view mutations received after base table drop.
         }
