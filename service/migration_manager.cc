@@ -488,20 +488,30 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
     }
 }
 
-future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, bool announce_locally) {
+future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, std::vector<view_ptr>&& view_updates, bool announce_locally) {
     warn(unimplemented::cause::VALIDATION);
 #if 0
     cfm.validate();
 #endif
     try {
+        auto ts = api::new_timestamp();
         auto& db = get_local_storage_proxy().get_db().local();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
 #if 0
         oldCfm.validateCompatility(cfm);
 #endif
         logger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
-        auto&& keyspace = db.find_keyspace(cfm->ks_name());
-        auto mutations = db::schema_tables::make_update_table_mutations(keyspace.metadata(), old_schema, cfm, api::new_timestamp(), from_thrift);
+        auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
+        auto mutations = db::schema_tables::make_update_table_mutations(keyspace, old_schema, cfm, ts, from_thrift);
+        for (auto&& view : view_updates) {
+            auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
+#if 0
+            oldCfm.validateCompatility(cfm);
+#endif
+            logger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
+            auto vmuts = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), api::new_timestamp());
+            std::move(vmuts.begin(), vmuts.end(), std::back_inserter(mutations));
+        }
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot update non existing table '%s' in keyspace '%s'.",
