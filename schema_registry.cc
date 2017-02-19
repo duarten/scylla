@@ -48,6 +48,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     , _version(v)
     , _registry(r)
     , _sync_state(sync_state::NOT_SYNCED)
+    , _view_state(view_state::UNMATCHED)
 { }
 
 schema_ptr schema_registry::learn(const schema_ptr& s) {
@@ -63,6 +64,14 @@ schema_ptr schema_registry::learn(const schema_ptr& s) {
     auto loaded_s = e_ptr->load(frozen_schema(s));
     _entries.emplace(s->version(), e_ptr);
     return loaded_s;
+}
+
+void schema_registry::learn_views(const schema_ptr& base, const std::vector<view_ptr>& views) {
+    get_entry(base->version()).set_views(views);
+}
+
+void schema_registry::unlearn_view(const schema_ptr& base, const view_ptr& view) {
+    get_entry(base->version()).unset_view(get_entry(view->version()));
 }
 
 schema_registry_entry& schema_registry::get_entry(table_schema_version v) const {
@@ -242,6 +251,26 @@ void schema_registry_entry::mark_synced() {
     }
     _sync_state = sync_state::SYNCED;
     logger.debug("Marked {} as synced", _version);
+}
+
+void schema_registry_entry::set_views(const std::vector<view_ptr>& views) {
+    if (_view_state == view_state::MATCHING) {
+        _views_matched_promise.set_value();
+        _views_matched_promise = {};
+    }
+    _view_state = view_state::MATCHED;
+    _views = boost::copy_range<std::vector<lw_shared_ptr<schema_registry_entry>>>(views | boost::adaptors::transformed([this] (auto&& v) {
+        return _registry.get_entry(v->version()).shared_from_this();
+    }));
+    if (!_views.empty()) {
+        logger.debug("Matched views for base table {}", _version);
+    }
+}
+
+void schema_registry_entry::unset_view(const schema_registry_entry& v) {
+    _views.erase(std::remove_if(_views.begin(), _views.end(), [&v] (auto&& view) {
+        return view.get() == &v;
+    }), _views.end());
 }
 
 schema_registry& local_schema_registry() {

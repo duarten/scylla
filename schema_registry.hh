@@ -75,6 +75,11 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     sync_state _sync_state;
     shared_promise<> _synced_promise; // valid when _sync_state == SYNCING
 
+    enum class view_state { UNMATCHED, MATCHING, MATCHED };
+    view_state _view_state;
+    shared_promise<> _views_matched_promise; // valid when _view_state == MATCHING
+    std::vector<lw_shared_ptr<schema_registry_entry>> _views;
+
     friend class schema_registry;
 public:
     schema_registry_entry(table_schema_version v, schema_registry& r);
@@ -94,6 +99,9 @@ public:
     frozen_schema frozen() const;
     // Can be called from other shards
     table_schema_version version() const { return _version; }
+    void set_views(const std::vector<view_ptr>& views);
+    // Call only when _view_state == MATCHED
+    void unset_view(const schema_registry_entry&);
 public:
     // Called by class schema
     void detach_schema() noexcept;
@@ -138,6 +146,13 @@ public:
     // because doing so ensures that the entry will be kept in the registry as
     // long as the schema is actively used.
     schema_ptr learn(const schema_ptr&);
+
+    // Learns the pairing between the base schema and its views. This is necessary
+    // so we can match a given base table version with a set of view schema versions.
+    // Must be called after all of the schemas have already been learned.
+    void learn_views(const schema_ptr& base, const std::vector<view_ptr>& views);
+    // Unregisters the specified view from the base schema.
+    void unlearn_view(const schema_ptr& base, const view_ptr& view);
 };
 
 schema_registry& local_schema_registry();
