@@ -49,6 +49,7 @@
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "service/pager/query_pagers.hh"
+#include "view_info.hh"
 
 namespace cql3 {
 
