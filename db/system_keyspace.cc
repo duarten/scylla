@@ -1065,6 +1065,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
         db.add_column_family(ks, table, std::move(cfg));
         maybe_add_virtual_reader(table, db);
     }
+    db.match_schema_views();
 }
 
 future<utils::UUID> get_local_host_id() {

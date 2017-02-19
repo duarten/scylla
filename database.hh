@@ -1265,6 +1265,8 @@ public:
         return _system_read_concurrency_sem;
     }
 
+    void match_schema_views();
+
     friend class distributed_loader;
 };
 
@@ -1272,6 +1274,8 @@ public:
 class secondary_index_manager {};
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
+
+future<> match_schema_views(distributed<service::storage_proxy>& proxy);
 
 class distributed_loader {
 public:

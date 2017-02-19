@@ -2061,6 +2061,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
         db.invoke_on_all([&proxy] (database& db) {
             return db.parse_system_tables(proxy);
         }).get();
+        match_schema_views(proxy);
 
         const auto& cfg = db.local().get_config();
         populate(db, cfg.data_file_directories()[0]).get();
@@ -3174,6 +3175,19 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
          }).then_wrapped([] (future<> f) {
             dblog.debug("Cleared out snapshot directories");
          });
+    });
+}
+
+void database::match_schema_views() {
+    for (auto&& cf : get_column_families()) {
+        auto& base = cf.second->schema();
+        local_schema_registry().learn_views(base, cf.second->views());
+    }
+}
+
+future<> match_schema_views(distributed<service::storage_proxy>& proxy) {
+    return proxy.local().get_db().invoke_on_all([] (database& db) {
+        db.match_schema_views();
     });
 }
 

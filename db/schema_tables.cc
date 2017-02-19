@@ -698,6 +698,8 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
                return service::get_local_migration_manager().notify_drop_keyspace(keyspace_to_drop);
             });
        }).get0();
+
+       match_schema_views(proxy);
    });
 }
 
