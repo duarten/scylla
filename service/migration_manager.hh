@@ -170,6 +170,6 @@ future<schema_ptr> get_schema_for_read(table_schema_version, net::msg_addr from)
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
 // Ensures that this node is synchronized with the returned schema. See schema::is_synced().
 // Intended to be used in the write path, which relies on synchronized schema.
-future<schema_ptr> get_schema_for_write(table_schema_version, net::msg_addr from);
+future<schema_and_views> get_schema_for_write(table_schema_version, net::msg_addr from);
 
 }

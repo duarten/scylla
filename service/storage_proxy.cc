@@ -955,15 +955,15 @@ future<>
 storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
     return _db.invoke_on(shard, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
-        return db.apply(s, m, timeout);
+        return db.apply(schema_and_views{std::move(s), { }}, m, timeout);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
+storage_proxy::mutate_locally(const schema_and_views& sav, const frozen_mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
-        return db.apply(gs, m, timeout);
+    return _db.invoke_on(shard, [&m, gsav = global_schema_and_views(sav), timeout] (database& db) -> future<> {
+        return db.apply(gsav, m, timeout);
     });
 }
 
@@ -1468,10 +1468,12 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto lmutate = [handler_ptr, response_id, this, my_address, timeout] (lw_shared_ptr<const frozen_mutation> m) mutable {
         tracing::trace(handler_ptr->get_trace_state(), "Executing a mutation locally");
         auto s = handler_ptr->get_schema();
-        return mutate_locally(std::move(s), *m, timeout).then([response_id, this, my_address, m, h = std::move(handler_ptr), p = shared_from_this()] {
-            // make mutation alive until it is processed locally, otherwise it
-            // may disappear if write timeouts before this future is ready
-            got_response(response_id, my_address);
+        s->registry_entry()->get_with_views_eventually().then([response_id, this, my_address, timeout, m, h = std::move(handler_ptr), p = shared_from_this()] (auto&& sav) {
+            return this->mutate_locally(std::move(sav), *m, timeout).then([response_id, this, my_address, m, h = std::move(h), p = std::move(p)] {
+                // make mutation alive until it is processed locally, otherwise it
+                // may disappear if write timeouts before this future is ready
+                this->got_response(response_id, my_address);
+            });
         });
     };
 
@@ -3535,9 +3537,9 @@ void storage_proxy::init_messaging_service() {
             return parallel_for_each(std::move(fms), [&mutations, src_addr] (frozen_mutation& fm) {
                 // FIXME: optimise for cases when all fms are in the same schema
                 auto schema_version = fm.schema_version();
-                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
+                return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_and_views&& sav) mutable {
                     // FIXME: unfreeze/freeze/unfreeze/freeze...
-                    mutations.emplace_back(fm.unfreeze(s));
+                    mutations.emplace_back(fm.unfreeze(sav.schema));
                 });
             }).then([&, cl, timeout] {
                 auto sp = get_local_shared_storage_proxy();
@@ -3571,8 +3573,8 @@ void storage_proxy::init_messaging_service() {
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
                 futurize<void>::apply([timeout, &p, &m, reply_to, src_addr = std::move(src_addr)] () mutable {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    return get_schema_for_write(m.schema_version(), std::move(src_addr)).then([&m, &p, timeout] (schema_ptr s) {
-                        return p->mutate_locally(std::move(s), m, timeout);
+                    return get_schema_for_write(m.schema_version(), std::move(src_addr)).then([&m, &p, timeout] (schema_and_views&& sav) {
+                        return p->mutate_locally(std::move(sav), m, timeout);
                     });
                 }).then([reply_to, shard, response_id, trace_state_ptr] () {
                     auto& ms = net::get_local_messaging_service();

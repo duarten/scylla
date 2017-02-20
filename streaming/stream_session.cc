@@ -120,7 +120,7 @@ void stream_session::init_messaging_service_handler() {
         return do_with(std::move(fm), [plan_id, from, fragmented] (const auto& fm) {
             auto fm_size = fm.representation().size();
             get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, fm_size);
-            return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm, fragmented] (schema_ptr s) {
+            return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm, fragmented] (schema_and_views&& sav) {
                 auto cf_id = fm.column_family_id();
                 sslog.debug("[Stream #{}] GOT STREAM_MUTATION from {}: cf_id={}", plan_id, from.addr, cf_id);
 
@@ -130,7 +130,7 @@ void stream_session::init_messaging_service_handler() {
                                plan_id, from.addr, cf_id);
                     return make_ready_future<>();
                 }
-                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), plan_id, fm, fragmented).then_wrapped([plan_id, cf_id, from] (auto&& f) {
+                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(sav.schema), plan_id, fm, fragmented).then_wrapped([plan_id, cf_id, from] (auto&& f) {
                     try {
                         f.get();
                         return make_ready_future<>();

@@ -821,9 +821,9 @@ public:
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
     const std::vector<view_ptr>& views() const;
-    future<> push_view_replica_updates(const schema_ptr& base, mutation&& m) const;
+    future<> push_view_replica_updates(const schema_ptr& base, const std::vector<view_ptr>& views, mutation&& m) const;
 private:
-    std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
+    std::vector<view_ptr> affected_views(const schema_ptr& base, const std::vector<view_ptr>& views, const mutation& update) const;
     future<std::vector<mutation>> generate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
             streamed_mutation updates,
@@ -1128,8 +1128,8 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_metrics();
 
-    future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
-    future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
+    future<> do_apply(schema_and_views, const frozen_mutation&, timeout_clock::time_point timeout);
+    future<> apply_with_commitlog(schema_and_views, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
 
     query::result_memory_limiter _result_memory_limiter;
 
@@ -1206,7 +1206,7 @@ public:
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
+    future<> apply(schema_and_views, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     future<frozen_mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);

@@ -892,10 +892,11 @@ future<schema_ptr> get_schema_for_read(table_schema_version v, net::messaging_se
     });
 }
 
-future<schema_ptr> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst).then([dst] (schema_and_views sav) {
-        return maybe_sync(sav.schema, dst).then([s = sav.schema] {
-            return s;
+future<schema_and_views> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
+    return get_schema_definition(v, dst).then([dst] (schema_and_views&& sav) {
+        auto f = maybe_sync(sav.schema, std::move(dst));
+        return f.then([sav = std::move(sav)] {
+            return std::move(sav);
         });
     });
 }

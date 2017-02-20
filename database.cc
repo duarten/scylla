@@ -2739,7 +2739,7 @@ future<frozen_mutation> database::do_apply_counter_update(column_family& cf, con
                 // FIXME: oh dear, another freeze
                 // FIXME: timeout
                 fm = freeze(m);
-                return this->do_apply(m_schema, *fm, { });
+                return this->do_apply({std::move(m_schema), { }}, *fm, { });
             }).then([&fm] {
                 return std::move(*fm);
             });
@@ -2906,11 +2906,12 @@ future<frozen_mutation> database::apply_counter_update(schema_ptr s, const froze
     }
 }
 
-future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::apply_with_commitlog(schema_and_views sav, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
-        commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(std::move(uuid), cew, timeout).then([&m, this, s, timeout](auto rp) {
-            return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
+        commitlog_entry_writer cew(sav.schema, m);
+        return cf.commitlog()->add_entry(std::move(uuid), cew, timeout).then([&m, this, sav = std::move(sav), timeout](auto rp) {
+            auto f = this->apply_in_memory(m, sav.schema, rp, timeout);
+            return f.handle_exception([this, sav = std::move(sav), &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -2920,40 +2921,40 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
                     // let's just try again, add the mutation to the CL once more,
                     // and assume success in inevitable eventually.
                     dblog.debug("replay_position reordering detected");
-                    return this->apply(s, m, timeout);
+                    return this->apply(std::move(sav), m, timeout);
                 }
             });
         });
     }
-    return apply_in_memory(m, std::move(s), db::replay_position(), timeout);
+    return apply_in_memory(m, std::move(sav.schema), db::replay_position(), timeout);
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::do_apply(schema_and_views sav, const frozen_mutation& m, timeout_clock::time_point timeout) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
-    if (!s->is_synced()) {
+    if (!sav.schema->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
-                                 s->ks_name(), s->cf_name(), s->version()));
+                                 sav.schema->ks_name(), sav.schema->cf_name(), sav.schema->version()));
     }
-    if (cf.views().empty()) {
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+    if (sav.views.empty()) {
+        return apply_with_commitlog(std::move(sav), cf, std::move(uuid), m, timeout);
     }
     //FIXME: Avoid unfreezing here.
-    auto f = cf.push_view_replica_updates(s, m.unfreeze(s));
-    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
+    auto f = cf.push_view_replica_updates(sav.schema, sav.views,  m.unfreeze(sav.schema));
+    return f.then([this, sav = std::move(sav), uuid = std::move(uuid), &m, timeout] {
         auto& cf = find_column_family(uuid);
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+        return apply_with_commitlog(std::move(sav), cf, std::move(uuid), m, timeout);
     });
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::apply(schema_and_views sav, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply {}", m.pretty_printer(s));
+        dblog.trace("apply {}", m.pretty_printer(sav.schema));
     }
-    return do_apply(std::move(s), m, timeout).then_wrapped([this, s = _stats] (auto f) {
+    return do_apply(std::move(sav), m, timeout).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
             try {
@@ -3696,9 +3697,9 @@ const std::vector<view_ptr>& column_family::views() const {
     return _views;
 }
 
-std::vector<view_ptr> column_family::affected_views(const schema_ptr& base, const mutation& update) const {
+std::vector<view_ptr> column_family::affected_views(const schema_ptr& base, const std::vector<view_ptr>& views, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
-    return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&, this] (auto&& view) {
+    return boost::copy_range<std::vector<view_ptr>>(views | boost::adaptors::filtered([&] (auto&& view) {
         return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
     }));
 }
@@ -3731,16 +3732,16 @@ future<std::vector<mutation>> column_family::generate_view_updates(const schema_
  * Given an update for the base table, calculates the set of potentially affected views,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
-future<> column_family::push_view_replica_updates(const schema_ptr& base, mutation&& m) const {
-    auto views = affected_views(base, m);
-    if (views.empty()) {
+future<> column_family::push_view_replica_updates(const schema_ptr& base, const std::vector<view_ptr>& views, mutation&& m) const {
+    auto affected = affected_views(base, views, m);
+    if (affected.empty()) {
         return make_ready_future<>();
     }
     //FIXME: Read existing mutations
     auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), _schema));
     auto base_token = m.token();
     return generate_view_updates(base,
-                std::move(views),
+                std::move(affected),
                 streamed_mutation_from_mutation(std::move(m)),
                 std::move(existing)).then([base_token = std::move(base_token)] (auto&& updates) {
         db::view::mutate_MV(std::move(base_token), std::move(updates));
