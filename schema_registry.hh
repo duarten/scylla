@@ -102,6 +102,9 @@ public:
     void set_views(const std::vector<view_ptr>& views);
     // Call only when _view_state == MATCHED
     void unset_view(const schema_registry_entry&);
+    future<schema_and_views> get_with_views_eventually();
+    // Call only when _view_state == MATCHED
+    schema_and_views get_with_views();
 public:
     // Called by class schema
     void detach_schema() noexcept;

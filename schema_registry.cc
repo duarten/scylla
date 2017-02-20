@@ -273,6 +273,27 @@ void schema_registry_entry::unset_view(const schema_registry_entry& v) {
     }), _views.end());
 }
 
+future<schema_and_views> schema_registry_entry::get_with_views_eventually() {
+    switch (_view_state) {
+    case schema_registry_entry::view_state::MATCHED:
+        return make_ready_future<schema_and_views>(get_with_views());
+    case schema_registry_entry::view_state::UNMATCHED:
+        _view_state = schema_registry_entry::view_state::MATCHING;
+    case schema_registry_entry::view_state::MATCHING:
+        return _views_matched_promise.get_shared_future().then([entry = shared_from_this()] {
+            return entry->get_with_views();
+        });
+    }
+    abort();
+}
+
+schema_and_views schema_registry_entry::get_with_views() {
+    auto views = boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::transformed([this] (auto&& v) {
+        return view_ptr(v->get_schema());
+    }));
+    return schema_and_views{get_schema(), std::move(views)};
+}
+
 schema_registry& local_schema_registry() {
     return registry;
 }
