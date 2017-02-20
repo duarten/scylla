@@ -685,4 +685,9 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const view_ptr& view);
 
+struct schema_and_views {
+    schema_ptr schema;
+    std::vector<view_ptr> views;
+};
+
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);
