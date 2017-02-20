@@ -854,7 +854,7 @@ future<query::result> messaging_service::send_read_data(msg_addr id, clock_type:
     return send_message_timeout<query::result>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr, da);
 }
 
-void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
+void messaging_service::register_get_schema_version(std::function<future<frozen_schema_and_views>(unsigned, table_schema_version)>&& func) {
     register_handler(this, net::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
 }
 void messaging_service::unregister_get_schema_version() {

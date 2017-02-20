@@ -3720,7 +3720,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_get_schema_version([] (unsigned shard, table_schema_version v) {
         return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
             logger.debug("Schema version request for {}", v);
-            return local_schema_registry().get_frozen(v);
+            return local_schema_registry().get_frozen_with_views_eventually(v);
         });
     });
 }
