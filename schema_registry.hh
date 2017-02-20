@@ -187,3 +187,15 @@ public:
     schema_ptr get() const;
     operator schema_ptr() const { return get(); }
 };
+
+struct global_schema_and_views {
+    global_schema_ptr schema;
+    std::vector<global_schema_ptr> views;
+
+    // Note: the schemas must come from the current shard and can't be nullptr.
+    global_schema_and_views(const schema_and_views& sav);
+    // May be invoked across shards. Always returns engaged pointers.
+    schema_and_views get() const;
+    operator schema_and_views() const { return get(); }
+};
+

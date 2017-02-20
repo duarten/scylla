@@ -403,3 +403,19 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         }())
     , _cpu_of_origin(engine().cpu_id())
 { }
+
+global_schema_and_views::global_schema_and_views(const schema_and_views& sav)
+        : schema(sav.schema)
+        , views(boost::copy_range<std::vector<global_schema_ptr>>(sav.views | boost::adaptors::transformed([] (auto& view) {
+              return global_schema_ptr(view);
+          })))
+{ }
+
+schema_and_views global_schema_and_views::get() const {
+    auto s = schema.get();
+    auto vs = boost::copy_range<std::vector<view_ptr>>(views | boost::adaptors::transformed([] (auto& view) {
+        return view_ptr(view.get());
+    }));
+    local_schema_registry().learn_views(s, vs);
+    return schema_and_views{std::move(s), std::move(vs)};
+}
