@@ -860,8 +860,8 @@ void messaging_service::register_get_schema_version(std::function<future<frozen_
 void messaging_service::unregister_get_schema_version() {
     _rpc->unregister_handler(net::messaging_verb::GET_SCHEMA_VERSION);
 }
-future<frozen_schema> messaging_service::send_get_schema_version(msg_addr dst, table_schema_version v) {
-    return send_message<frozen_schema>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
+future<frozen_schema_and_views> messaging_service::send_get_schema_version(msg_addr dst, table_schema_version v) {
+    return send_message<frozen_schema_and_views>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
 }
 
 void messaging_service::register_schema_check(std::function<future<utils::UUID>()>&& func) {
