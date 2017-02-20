@@ -21,9 +21,19 @@
 
 #include <seastar/core/sharded.hh>
 
-#include "schema_registry.hh"
-#include "log.hh"
+#include <boost/range/adaptor/transformed.hpp>
 
+#include "schema_registry.hh"
+#include "canonical_mutation.hh"
+#include "log.hh"
+#include "schema_mutations.hh"
+#include "utils/UUID.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 static logging::logger logger("schema_registry");
 
@@ -94,7 +104,7 @@ frozen_schema schema_registry::get_frozen(table_schema_version v) const {
     return get_entry(v).frozen();
 }
 
-future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
+future<schema_and_views> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
     auto i = _entries.find(v);
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
@@ -106,7 +116,7 @@ future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const as
     if (e._state == schema_registry_entry::state::LOADING) {
         return e._schema_promise.get_shared_future();
     }
-    return make_ready_future<schema_ptr>(e.get_schema());
+    return e.get_with_views_eventually();
 }
 
 schema_ptr schema_registry::get_or_null(table_schema_version v) const {
@@ -140,7 +150,7 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();
     if (_state == state::LOADING) {
-        _schema_promise.set_value(s);
+        _schema_promise.set_value(schema_and_views{s, {}});
         _schema_promise = {};
     }
     _state = state::LOADED;
@@ -148,13 +158,36 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
     return s;
 }
 
-future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader loader) {
+void schema_registry_entry::load(frozen_schema_and_views fs) {
+    std::vector<view_ptr> views;
+    views.reserve(fs.views().size());
+    for (auto&& fv : std::move(fs).views()) {
+        auto in = ser::as_input_stream(fv.representation());
+        auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
+        auto version = sv.version();
+        auto s = _registry.get_or_load(version, [&fv] (table_schema_version) {
+            return std::move(fv);
+        });
+        views.push_back(view_ptr(std::move(s)));
+    }
+    set_views(views);
+    _frozen_schema = std::move(fs).schema();
+    auto sav = schema_and_views{get_schema(), std::move(views)};
+    logger.trace("Loaded {} = {} (with views)", _version, *sav.schema);
+    if (_state == state::LOADING) {
+        _schema_promise.set_value(std::move(sav));
+        _schema_promise = {};
+    }
+    _state = state::LOADED;
+}
+
+future<schema_and_views> schema_registry_entry::start_loading(async_schema_loader loader) {
     _loader = std::move(loader);
     auto f = _loader(_version);
     auto sf = _schema_promise.get_shared_future();
     _state = state::LOADING;
     logger.trace("Loading {}", _version);
-    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
+    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema_and_views>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             logger.trace("Loading of {} aborted", _version);

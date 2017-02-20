@@ -48,6 +48,12 @@
 #include "service/migration_task.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 namespace service {
 
@@ -208,9 +214,9 @@ future<> migration_manager::merge_schema_from(net::messaging_service::msg_addr s
     logger.debug("Applying schema mutations from {}", src);
     return map_reduce(mutations, [src](const frozen_mutation& fm) {
         // schema table's schema is not syncable so just use get_schema_definition()
-        return get_schema_definition(fm.schema_version(), src).then([&fm](schema_ptr s) {
-            s->registry_entry()->mark_synced();
-            return fm.unfreeze(std::move(s));
+        return get_schema_definition(fm.schema_version(), src).then([&fm] (schema_and_views&& sav) {
+            sav.schema->registry_entry()->mark_synced();
+            return fm.unfreeze(std::move(sav.schema));
         });
     }, std::vector<mutation>(), [](std::vector<mutation>&& all, mutation&& m) {
         all.emplace_back(std::move(m));
@@ -872,21 +878,25 @@ static future<> maybe_sync(const schema_ptr& s, net::messaging_service::msg_addr
     });
 }
 
-future<schema_ptr> get_schema_definition(table_schema_version v, net::messaging_service::msg_addr dst) {
+future<schema_and_views> get_schema_definition(table_schema_version v, net::messaging_service::msg_addr dst) {
     return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
         logger.debug("Requesting schema {} from {}", v, dst);
         auto& ms = net::get_local_messaging_service();
-        return ms.send_get_schema_version(dst, v);
+        return ms.send_get_schema_version(dst, v).then([] (auto&& s) {
+            return frozen_schema_and_views(std::move(s), {});
+        });
     });
 }
 
 future<schema_ptr> get_schema_for_read(table_schema_version v, net::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst);
+    return get_schema_definition(v, dst).then([] (schema_and_views&& sav) {
+        return std::move(sav.schema);
+    });
 }
 
 future<schema_ptr> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
-        return maybe_sync(s, dst).then([s] {
+    return get_schema_definition(v, dst).then([dst] (schema_and_views sav) {
+        return maybe_sync(sav.schema, dst).then([s = sav.schema] {
             return s;
         });
     });

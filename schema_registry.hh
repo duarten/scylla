@@ -30,7 +30,7 @@
 
 class schema_registry;
 
-using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
+using async_schema_loader = std::function<future<frozen_schema_and_views>(table_schema_version)>;
 using schema_loader = std::function<frozen_schema(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
@@ -64,7 +64,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     schema_registry& _registry; // always valid
 
     async_schema_loader _loader; // valid when state == LOADING
-    shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
+    shared_promise<schema_and_views> _schema_promise; // valid when state == LOADING
 
     std::experimental::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
     // valid when state == LOADED
@@ -87,7 +87,8 @@ public:
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
     schema_ptr load(frozen_schema);
-    future<schema_ptr> start_loading(async_schema_loader);
+    void load(frozen_schema_and_views);
+    future<schema_and_views> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
     // Can be called from other shards
     bool is_synced() const;
@@ -132,7 +133,7 @@ public:
     // deferring. The loader is copied must be alive only until this method
     // returns. If the loader fails, the future resolves with
     // schema_version_loading_failed.
-    future<schema_ptr> get_or_load(table_schema_version, const async_schema_loader&);
+    future<schema_and_views> get_or_load(table_schema_version, const async_schema_loader&);
 
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.

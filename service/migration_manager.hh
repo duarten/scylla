@@ -48,6 +48,7 @@
 #include "gms/inet_address.hh"
 #include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
+#include "schema_registry.hh"
 
 #include <vector>
 
@@ -159,7 +160,7 @@ inline migration_manager& get_local_migration_manager() {
 
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
 // Doesn't affect current node's schema in any way.
-future<schema_ptr> get_schema_definition(table_schema_version, net::msg_addr from);
+future<schema_and_views> get_schema_definition(table_schema_version, net::msg_addr from);
 
 // Returns schema of given version, either from cache or from remote node identified by 'from'.
 // The returned schema may not be synchronized. See schema::is_synced().
