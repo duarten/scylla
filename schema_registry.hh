@@ -103,6 +103,9 @@ public:
     void set_views(const std::vector<view_ptr>& views);
     // Call only when _view_state == MATCHED
     void unset_view(const schema_registry_entry&);
+    future<frozen_schema_and_views> get_frozen_with_views_eventually();
+    // Call only when _view_state == MATCHED
+    frozen_schema_and_views get_frozen_with_views() const;
     future<schema_and_views> get_with_views_eventually();
     // Call only when _view_state == MATCHED
     schema_and_views get_with_views();
@@ -142,6 +145,11 @@ public:
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.
     frozen_schema get_frozen(table_schema_version) const;
+
+    // Looks up schema version and include its views. Returns a failed future if
+    // the schema is not found, with a schema_version_not_found exception. The
+    // future is resolved when any views have been matched.
+    future<frozen_schema_and_views> get_frozen_with_views_eventually(table_schema_version) const;
 
     // Attempts to add given schema to the registry. If the registry already
     // knows about the schema, returns existing entry, otherwise returns back

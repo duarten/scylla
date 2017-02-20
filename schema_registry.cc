@@ -104,6 +104,10 @@ frozen_schema schema_registry::get_frozen(table_schema_version v) const {
     return get_entry(v).frozen();
 }
 
+future<frozen_schema_and_views> schema_registry::get_frozen_with_views_eventually(table_schema_version v) const {
+    return get_entry(v).get_frozen_with_views_eventually();
+}
+
 future<schema_and_views> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
     auto i = _entries.find(v);
     if (i == _entries.end()) {
@@ -304,6 +308,27 @@ void schema_registry_entry::unset_view(const schema_registry_entry& v) {
     _views.erase(std::remove_if(_views.begin(), _views.end(), [&v] (auto&& view) {
         return view.get() == &v;
     }), _views.end());
+}
+
+future<frozen_schema_and_views> schema_registry_entry::get_frozen_with_views_eventually() {
+    switch (_view_state) {
+    case schema_registry_entry::view_state::MATCHED:
+        return make_ready_future<frozen_schema_and_views>(get_frozen_with_views());
+    case schema_registry_entry::view_state::UNMATCHED:
+        _view_state = schema_registry_entry::view_state::MATCHING;
+    case schema_registry_entry::view_state::MATCHING:
+        return _views_matched_promise.get_shared_future().then([entry = shared_from_this()] {
+            return entry->get_frozen_with_views();
+        });
+    }
+    abort();
+}
+
+frozen_schema_and_views schema_registry_entry::get_frozen_with_views() const {
+    auto views = boost::copy_range<std::vector<frozen_schema>>(_views | boost::adaptors::transformed([this] (auto&& v) {
+        return v->frozen();
+    }));
+    return frozen_schema_and_views(frozen(), std::move(views));
 }
 
 future<schema_and_views> schema_registry_entry::get_with_views_eventually() {
