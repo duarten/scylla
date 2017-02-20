@@ -37,3 +37,8 @@ class schema stub [[writable]] {
 class frozen_schema final {
     bytes representation();
 };
+
+class frozen_schema_and_views final {
+    frozen_schema schema();
+    std::vector<frozen_schema> views() = std::vector<frozen_schema>();
+};
