@@ -30,7 +30,7 @@
 
 class schema_registry;
 
-using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
+using async_schema_loader = std::function<future<frozen_schema_and_views>(table_schema_version)>;
 using schema_loader = std::function<frozen_schema(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
@@ -82,6 +82,7 @@ public:
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
     schema_ptr load(frozen_schema);
+    void load(frozen_schema_and_views);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
     // Can be called from other shards

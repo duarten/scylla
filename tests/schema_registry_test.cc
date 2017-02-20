@@ -51,7 +51,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
         auto s2 = random_schema();
 
         auto s1_loaded = local_schema_registry().get_or_load(s1->version(), [s1] (table_schema_version) {
-            return make_ready_future<frozen_schema>(frozen_schema(s1));
+            return make_ready_future<frozen_schema_and_views>(frozen_schema_and_views(frozen_schema(s1), { }));
         }).get0();
 
         BOOST_REQUIRE(s1_loaded);
@@ -60,7 +60,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
         BOOST_REQUIRE(s1_later);
 
         auto s2_loaded = local_schema_registry().get_or_load(s2->version(), [s2] (table_schema_version) {
-            return later().then([s2] { return frozen_schema(s2); });
+            return later().then([s2] { return frozen_schema_and_views(frozen_schema(s2), { }); });
         }).get0();
 
         BOOST_REQUIRE(s2_loaded);

@@ -23,7 +23,14 @@
 
 #include "schema_registry.hh"
 #include "log.hh"
-
+#include "schema_mutations.hh"
+#include "utils/UUID.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 static logging::logger logger("schema_registry");
 
@@ -139,13 +146,26 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
     return s;
 }
 
+void schema_registry_entry::load(frozen_schema_and_views fs) {
+    auto s = load(std::move(fs).schema());
+    for (auto&& fv : std::move(fs).views()) {
+        auto in = ser::as_input_stream(fv.representation());
+        auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
+        auto version = sv.version();
+        auto v = _registry.get_or_load(version, [&fv] (table_schema_version) {
+            return std::move(fv);
+        });
+        s->add_or_update_view(view_ptr(std::move(v)));
+    }
+}
+
 future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader loader) {
     _loader = std::move(loader);
     auto f = _loader(_version);
     auto sf = _schema_promise.get_shared_future();
     _state = state::LOADING;
     logger.trace("Loading {}", _version);
-    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
+    f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema_and_views>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             logger.trace("Loading of {} aborted", _version);
