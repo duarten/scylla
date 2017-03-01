@@ -3724,6 +3724,16 @@ void storage_proxy::init_messaging_service() {
             return local_schema_registry().get_frozen(v);
         });
     });
+
+    ms.register_get_schema_version_with_views([] (unsigned shard, table_schema_version v) {
+        return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
+            logger.debug("Schema version with views request for {}", v);
+            auto s = local_schema_registry().get(v);
+            auto freeze = [] (const schema_ptr& v) { return v->registry_entry()->frozen(); };
+            auto views = boost::copy_range<std::vector<frozen_schema>>(s->views() | boost::adaptors::transformed(freeze));
+            return frozen_schema_and_views(freeze(s), std::move(views));
+        });
+    });
 }
 
 void storage_proxy::uninit_messaging_service() {

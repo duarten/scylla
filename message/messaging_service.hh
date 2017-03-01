@@ -58,6 +58,7 @@ class seed_provider_type;
 
 class frozen_mutation;
 class frozen_schema;
+class frozen_schema_and_views;
 class partition_checksum;
 
 namespace dht {
@@ -108,7 +109,8 @@ enum class messaging_verb : int32_t {
     GET_SCHEMA_VERSION = 21,
     SCHEMA_CHECK = 22,
     COUNTER_MUTATION = 23,
-    LAST = 24,
+    GET_SCHEMA_VERSION_WITH_VIEWS = 24,
+    LAST = 25,
 };
 
 } // namespace net
@@ -313,6 +315,11 @@ public:
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
     void unregister_get_schema_version();
     future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
+
+    // Wrapper for GET_SCHEMA_VERSION_WITH_VIEWS
+    void register_get_schema_version_with_views(std::function<future<frozen_schema_and_views>(unsigned, table_schema_version)>&& func);
+    void unregister_get_schema_version_with_views();
+    future<frozen_schema_and_views> send_get_schema_version_with_views(msg_addr, table_schema_version);
 
     // Wrapper for SCHEMA_CHECK
     void register_schema_check(std::function<future<utils::UUID>()>&& func);
