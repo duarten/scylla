@@ -602,11 +602,10 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         if (schema->is_view()) {
             throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
         }
-        auto&& views = old_cfm.views();
-        if (!views.empty()) {
+        if (!schema->views().empty()) {
             throw exceptions::invalid_request_exception(sprint(
                         "Cannot drop table when materialized views still depend on it (%s.{%s})",
-                        ks_name, ::join(", ", views | boost::adaptors::transformed([](auto&& v) { return v->cf_name(); }))));
+                        ks_name, ::join(", ", schema->views() | boost::adaptors::transformed([](auto&& v) { return v->cf_name(); }))));
         }
         logger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
         auto mutations = db::schema_tables::make_drop_table_mutations(db.find_keyspace(ks_name).metadata(), schema, api::new_timestamp());

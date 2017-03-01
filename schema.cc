@@ -1010,6 +1010,35 @@ bool schema::equal_columns(const schema& other) const {
     return boost::equal(all_columns_in_select_order(), other.all_columns_in_select_order());
 }
 
+const std::vector<view_ptr>& schema::views() const {
+    return _views;
+}
+
+static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
+    return std::find_if(views.begin(), views.end(), [&v] (auto&& e) {
+        return e->cf_name() == v->cf_name();
+    });
+}
+
+void schema::add_view(view_ptr view) const {
+    auto existing = find_view(_views, view);
+    if (existing == _views.end()) {
+        _views.push_back(std::move(view));
+    }
+}
+
+void schema::add_or_update_view(view_ptr view) const {
+    remove_view(view);
+    _views.push_back(std::move(view));
+}
+
+void schema::remove_view(const view_ptr& view) const {
+    auto existing = find_view(_views, view);
+    if (existing != _views.end()) {
+        _views.erase(existing);
+    }
+}
+
 raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
         : _base_id(std::move(base_id))
         , _base_name(std::move(base_name))

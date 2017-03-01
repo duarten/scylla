@@ -178,7 +178,6 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         def = get_column_definition(schema, *column_name);
     }
 
-    auto& cf = db.find_column_family(schema);
     std::vector<schema_ptr> view_updates;
 
     switch (_type) {
@@ -232,7 +231,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         // Adding a column to a table which has an include all view requires the column to be added to the view
         // as well
         if (!_is_static) {
-            for (auto&& view : cf.views()) {
+            for (auto&& view : schema->views()) {
                 if (view->view_info()->include_all_columns()) {
                     schema_builder builder(view);
                     builder.with_column(column_name->name(), type);
@@ -256,7 +255,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
 
         // We also have to validate the view types here. If we have a view which includes a column as part of
         // the clustering key, we need to make sure that it is indeed compatible.
-        for (auto&& view : cf.views()) {
+        for (auto&& view : schema->views()) {
             auto* view_def = view->get_column_definition(column_name->name());
             if (view_def) {
                 schema_builder builder(view);
@@ -289,7 +288,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         }
 
         // If a column is dropped which is included in a view, we don't allow the drop to take place.
-        auto view_names = ::join(", ", cf.views()
+        auto view_names = ::join(", ", schema->views()
                    | boost::adaptors::filtered([&] (auto&& v) { return bool(v->get_column_definition(column_name->name())); })
                    | boost::adaptors::transformed([] (auto&& v) { return v->cf_name(); }));
         if (!view_names.empty()) {
@@ -307,7 +306,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
 
         _properties->validate();
 
-        if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
+        if (!schema->views().empty() && _properties->get_gc_grace_seconds() == 0) {
             throw exceptions::invalid_request_exception(
                     "Cannot alter gc_grace_seconds of the base table of a "
                     "materialized view to 0, since this value is used to TTL "
@@ -332,7 +331,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
             cfm.with_column_rename(from->name(), to->name());
 
             // If the view includes a renamed column, it must be renamed in the view table and the definition.
-            for (auto&& view : cf.views()) {
+            for (auto&& view : schema->views()) {
                 if (view->get_column_definition(from->name())) {
                     schema_builder builder(view);
 

@@ -378,6 +378,7 @@ bool operator==(const raw_view_info&, const raw_view_info&);
 std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
 
 class view_info;
+class view_ptr;
 
 /*
  * Effectively immutable.
@@ -440,6 +441,7 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
     column_mapping _column_mapping;
     bool _is_counter = false;
+    mutable std::vector<view_ptr> _views; // Not part of the schema's identity or it's constness.
     friend class schema_builder;
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;
@@ -650,6 +652,10 @@ public:
     // recent as this version.
     bool is_synced() const;
     bool equal_columns(const schema&) const;
+    void add_view(view_ptr) const;
+    void add_or_update_view(view_ptr) const;
+    void remove_view(const view_ptr&) const;
+    const std::vector<view_ptr>& views() const;
 };
 
 bool operator==(const schema&, const schema&);

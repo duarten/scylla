@@ -2158,7 +2158,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
     if (schema->is_view()) {
-        find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
+        find_schema(schema->view_info()->base_id())->add_or_update_view(view_ptr(schema));
     }
 }
 
@@ -2173,11 +2173,14 @@ bool database::update_column_family(schema_ptr new_schema) {
     bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
     auto s = local_schema_registry().learn(new_schema);
     s->registry_entry()->mark_synced();
+    for (auto&& v : cfm.schema()->views()) {
+        s->add_view(v);
+    }
     cfm.set_schema(s);
     find_keyspace(s->ks_name()).metadata()->add_or_update_column_family(s);
     if (s->is_view()) {
         try {
-            find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));
+            find_schema(s->view_info()->base_id())->add_or_update_view(view_ptr(s));
         } catch (no_such_column_family&) {
             // Update view mutations received after base table drop.
         }
@@ -2195,7 +2198,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
     if (s->is_view()) {
         try {
-            find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
+            find_schema(s->view_info()->base_id())->remove_view(view_ptr(s));
         } catch (no_such_column_family&) {
             // Drop view mutations received after base table drop.
         }
@@ -2947,7 +2950,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-    if (cf.views().empty()) {
+    if (s->views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     }
     //FIXME: Avoid unfreezing here.
@@ -3672,34 +3675,9 @@ void column_family::set_schema(schema_ptr s) {
     trigger_compaction();
 }
 
-static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
-    return std::find_if(views.begin(), views.end(), [&v] (auto&& e) {
-        return e->cf_name() == v->cf_name();
-    });
-}
-void column_family::add_or_update_view(view_ptr v) {
-    auto existing = find_view(_views, v);
-    if (existing != _views.end()) {
-        *existing = std::move(v);
-    } else {
-        _views.push_back(std::move(v));
-    }
-}
-
-void column_family::remove_view(view_ptr v) {
-    auto existing = find_view(_views, v);
-    if (existing != _views.end()) {
-        _views.erase(existing);
-    }
-}
-
-const std::vector<view_ptr>& column_family::views() const {
-    return _views;
-}
-
 std::vector<view_ptr> column_family::affected_views(const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
-    return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&, this] (auto&& view) {
+    return boost::copy_range<std::vector<view_ptr>>(base->views() | boost::adaptors::filtered([&, this] (auto&& view) {
         return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
     }));
 }

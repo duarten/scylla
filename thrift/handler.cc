@@ -810,7 +810,7 @@ public:
                 if (cf.schema()->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
                 }
-                if (!cf.views().empty()) {
+                if (!cf.schema()->views().empty()) {
                     throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views %s", column_family);
                 }
                 return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
@@ -880,7 +880,7 @@ public:
                                                               "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
             }
 
-            if (!cf.views().empty()) {
+            if (!schema->views().empty()) {
                 throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views %s as it may break the schema. "
                                                               "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
             }
