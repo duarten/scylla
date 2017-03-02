@@ -886,7 +886,11 @@ future<schema_ptr> get_schema_for_read(table_schema_version v, net::messaging_se
 }
 
 future<schema_ptr> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
-    return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
+    return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
+        logger.debug("Requesting schema {} from {} for write, with views", v, dst);
+        auto& ms = net::get_local_messaging_service();
+        return ms.send_get_schema_version_with_views(dst, v);
+    }).then([dst] (schema_ptr s) {
         return maybe_sync(s, dst).then([s] {
             return s;
         });
