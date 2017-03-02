@@ -293,6 +293,16 @@ schema_ptr global_schema_ptr::get() const {
             s = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
                 return e.frozen();
             });
+            // NOTE: Despite schema::views() being a mutable vector, the following is safe because
+            // this code path only triggers for schemas loaded through schema_registry::get_or_load(),
+            // which represent transient schemas that this host won't hold on to for longer than the
+            // duration of the request, and so we know there won't be any concurrent mutation.
+            for (auto& foreign_view : _ptr->views()) {
+                auto v = local_schema_registry().get_or_load(foreign_view->version(), [&foreign_view](table_schema_version) {
+                    return foreign_view->registry_entry()->frozen();
+                });
+                s->add_or_update_view(view_ptr(std::move(v)));
+            }
             if (e.is_synced()) {
                 s->registry_entry()->mark_synced();
             }
