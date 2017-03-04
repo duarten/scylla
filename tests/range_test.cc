@@ -394,5 +394,32 @@ BOOST_AUTO_TEST_CASE(test_split_after) {
     BOOST_REQUIRE_EQUAL(wr6.split_after(6, cmp), stdx::nullopt);
     BOOST_REQUIRE_EQUAL(wr6.split_after(8, cmp), wr(b(8, false), b(5)));
     BOOST_REQUIRE_EQUAL(wr6.split_after(9, cmp), wr(b(9, false), b(5)));
+}
 
+BOOST_AUTO_TEST_CASE(test_intersect) {
+    using b = range_bound<unsigned>;
+    using nwr = nonwrapping_range<unsigned>;
+    auto cmp = unsigned_comparator();
+
+    auto r1 = nwr(b(5), b(10));
+    auto r2 = nwr(b(1), b(4));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r2, cmp), stdx::nullopt);
+    auto r3 = nwr(b(1), b(5));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r3, cmp), nwr(b(5), b(5)));
+    auto r4 = nwr(b(2), b(7));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r4, cmp), nwr(b(5), b(7)));
+    auto r5 = nwr(b(5), b(8));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r5, cmp), nwr(b(5), b(8)));
+    auto r6 = nwr(b(6), b(8));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r6, cmp), nwr(b(6), b(8)));
+    auto r7 = nwr(b(7), b(10));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r7, cmp), nwr(b(7), b(10)));
+    auto r8 = nwr(b(8), b(11));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r8, cmp), nwr(b(8), b(10)));
+    auto r9 = nwr(b(10), b(12));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r9, cmp), nwr(b(10), b(10)));
+    auto r10 = nwr(b(12), b(20));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r10, cmp), stdx::nullopt);
+    auto r11 = nwr(b(1), b(20));
+    BOOST_REQUIRE_EQUAL(r1.intersect(r11, cmp), nwr(b(5), b(10)));
 }
