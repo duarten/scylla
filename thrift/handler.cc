@@ -1739,7 +1739,7 @@ private:
             if (s.thrift().is_dynamic()) {
                 for (auto&& name : predicate.column_names) {
                     auto ckey = make_clustering_prefix(s, to_bytes(name));
-                    m_to_apply.partition().apply_delete(s, std::move(ckey), tombstone(timestamp, deletion_time));
+                    m_to_apply.partition().apply_delete(s, std::move(ckey), row_tombstone::regular(timestamp, deletion_time));
                 }
             } else {
                 for (auto&& name : predicate.column_names) {

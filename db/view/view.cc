@@ -355,7 +355,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
             static_pointer_cast<const collection_type_impl>(def->type)->for_each_cell(cell.as_collection_mutation(), set_max_ts);
         }
     });
-    get_view_row(base_key, existing).apply(tombstone(ts, now));
+    get_view_row(base_key, existing).apply(row_tombstone::shadowable(ts, now));
 }
 
 /**
@@ -527,13 +527,13 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
-        existing->marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
-        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, tombstone(), _now, always_gc, gc_before);
+        existing->marker().compact_and_expire(existing->tomb().tomb(), _now, always_gc, gc_before);
+        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, existing->tomb().tomb(), _now, always_gc, gc_before);
         update.apply(*_schema, *existing);
     }
 
-    update.marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
-    update.cells().compact_and_expire(*_schema, column_kind::regular_column, tombstone(), _now, always_gc, gc_before);
+    update.marker().compact_and_expire(update.tomb().tomb(), _now, always_gc, gc_before);
+    update.cells().compact_and_expire(*_schema, column_kind::regular_column, update.tomb().tomb(), _now, always_gc, gc_before);
 
     for (auto&& v : _view_updates) {
         v.generate_update(_updates.key(), update, existing, _now);
@@ -542,7 +542,7 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
 
 static void apply_tracked_tombstones(range_tombstone_accumulator& tracker, clustering_row& row) {
     for (auto&& rt : tracker.range_tombstones_for_row(row.key())) {
-        row.apply(rt.tomb);
+        row.apply(row_tombstone::regular(rt.tomb));
     }
 }
 
@@ -558,7 +558,7 @@ future<stop_iteration> view_update_builder::on_results() {
                 apply_tracked_tombstones(_update_tombstone_tracker, update);
                 auto tombstone = _existing_tombstone_tracker.current_tombstone();
                 auto existing = tombstone
-                              ? stdx::optional<clustering_row>(stdx::in_place, update.key(), std::move(tombstone), row_marker(), ::row())
+                              ? stdx::optional<clustering_row>(stdx::in_place, update.key(), row_tombstone::regular(std::move(tombstone)), row_marker(), ::row())
                               : stdx::nullopt;
                 generate_update(std::move(update), std::move(existing));
             }
@@ -577,7 +577,7 @@ future<stop_iteration> view_update_builder::on_results() {
                 // tombstone, since we wouldn't have read the existing row otherwise. We don't assert that in case the
                 // read method ever changes.
                 if (tombstone) {
-                    auto update = clustering_row(existing.key(), std::move(tombstone), row_marker(), ::row());
+                    auto update = clustering_row(existing.key(), row_tombstone::regular(std::move(tombstone)), row_marker(), ::row());
                     generate_update(std::move(update), { std::move(existing) });
                 }
             }
@@ -602,7 +602,7 @@ future<stop_iteration> view_update_builder::on_results() {
         // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
         if (!_existing->is_range_tombstone()) {
             auto& existing = _existing->as_clustering_row();
-            auto update = clustering_row(existing.key(), std::move(tombstone), row_marker(), ::row());
+            auto update = clustering_row(existing.key(), row_tombstone::regular(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
         }
         return advance_existings();

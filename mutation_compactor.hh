@@ -184,13 +184,14 @@ public:
 
     stop_iteration consume(clustering_row&& cr) {
         auto current_tombstone = _range_tombstones.tombstone_for_row(cr.key());
-        auto t = current_tombstone;
-        t.apply(cr.tomb());
-        if (cr.tomb() <= current_tombstone || can_purge_tombstone(cr.tomb())) {
+        auto t = row_tombstone::regular(current_tombstone);
+        if (cr.tomb() <= t || can_purge_tombstone(cr.tomb().tomb())) {
             cr.remove_tombstone();
+        } else {
+            t.apply(cr.tomb(), cr.marker());
         }
-        bool is_live = cr.marker().compact_and_expire(t, _query_time, _can_gc, _gc_before);
-        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
+        bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, _gc_before);
+        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t.tomb(), _query_time, _can_gc, _gc_before);
         if (only_live() && is_live) {
             partition_is_not_empty();
             auto stop = _consumer.consume(std::move(cr), t, true);

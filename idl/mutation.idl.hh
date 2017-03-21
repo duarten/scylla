@@ -98,10 +98,15 @@ class dead_marker final stub [[writable]] {
     tombstone tomb;
 };
 
+class row_tombstone stub [[writable]] {
+    tombstone tomb;
+    bool is_shadowable [[version 1.8]] = false;
+};
+
 class deletable_row stub [[writable]] {
     clustering_key key;
     boost::variant<live_marker, expiring_marker, dead_marker, no_marker> marker;
-    tombstone deleted_at;
+    row_tombstone deleted_at;
     row cells;
 };
 
