@@ -1226,7 +1226,7 @@ future<std::vector<mutation>> make_drop_type_mutations(lw_shared_ptr<keyspace_me
     auto pkey = partition_key::from_singular(*s, type->_keyspace);
     auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
     mutation m{pkey, s};
-    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    m.partition().apply_delete(*s, ckey, row_tombstone::regular(timestamp, gc_clock::now()));
     mutations.emplace_back(std::move(m));
 
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
@@ -1411,7 +1411,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     auto pkey = partition_key::from_singular(*schema_table, table_or_view->ks_name());
     mutation m{std::move(pkey), schema_table};
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
-    m.partition().apply_delete(*schema_table, std::move(ckey), tombstone(timestamp, gc_clock::now()));
+    m.partition().apply_delete(*schema_table, std::move(ckey), row_tombstone::regular(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
     for (auto &column : table_or_view->all_columns_in_select_order()) {
         drop_column_from_schema_mutation(table_or_view, column, timestamp, mutations);
@@ -1736,7 +1736,7 @@ void drop_column_from_schema_mutation(schema_ptr table, const column_definition&
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), column.name()});
     mutation m{pkey, s};
-    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    m.partition().apply_delete(*s, ckey, row_tombstone::regular(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
 }
 

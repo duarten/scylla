@@ -1567,7 +1567,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         mutation m(key, s);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
-        m.partition().apply_delete(*s, std::move(c_key), tomb);
+        m.partition().apply_delete(*s, std::move(c_key), row_tombstone::regular(tomb));
         mt->apply(std::move(m));
 
         auto sst = make_lw_shared<sstable>(s, "tests/sstables/tests-temporary", 41, la, big);
@@ -1580,7 +1580,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto c_row = *(mp.clustered_rows().begin());
-                        BOOST_REQUIRE(c_row.row().deleted_at() == tomb);
+                        BOOST_REQUIRE(c_row.row().deleted_at().tomb() == tomb);
                     });
                 });
             });
@@ -2782,7 +2782,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
 
             mt = make_lw_shared<memtable>(s);
             m = mutation(partition_key::from_exploded(*s, {to_bytes("deletetest")}), s);
-            tombstone tomb(api::new_timestamp(), now);
+            auto tomb = row_tombstone::regular(api::new_timestamp(), now);
             m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
             mt->apply(std::move(m));
             auto sst2 = get_usable_sst(*mt, 55).get0();
@@ -3010,7 +3010,7 @@ static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> explode
         auto key = partition_key::from_exploded(*s, exploded_pk);
         auto c_key = clustering_key::from_exploded(*s, exploded_ck);
         mutation m(key, s);
-        tombstone tomb(api::new_timestamp(), gc_clock::now());
+        auto tomb = row_tombstone::regular(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, c_key, tomb);
         mt->apply(std::move(m));
     };

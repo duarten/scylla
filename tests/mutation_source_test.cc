@@ -547,7 +547,7 @@ struct mutation_sets {
 };
 
 static tombstone new_tombstone() {
-    return { new_timestamp(), gc_clock::now() };
+    return tombstone(new_timestamp(), gc_clock::now());
 }
 
 static mutation_sets generate_mutation_sets() {
@@ -596,7 +596,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto tomb = new_tombstone();
+            auto tomb = row_tombstone::regular(new_tombstone());
             m1.partition().apply_delete(*s1, ck2, tomb);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.partition().apply_delete(*s1, ck2, tomb);
@@ -789,7 +789,11 @@ public:
     explicit impl(generate_counters counters) : _generate_counters(counters) {
         std::random_device rd;
         // In case of errors, replace the seed with a fixed value to get a deterministic run.
-        auto seed = rd();
+        //auto seed = rd();
+        auto seed = 3516249912;
+        //auto seed = 2496928215;
+        //auto seed = 127093357;
+        //auto seed = 1629637559;
         BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
         _gen = std::mt19937(seed);
 

@@ -187,6 +187,16 @@ static void write_tombstones(const schema& s, auto& row_tombstones, const range_
     }
 }
 
+static auto write_row_tombstone(auto&& writer, const row_tombstone& t) {
+    return std::move(writer).start_deleted_at()
+        .start_tomb()
+            .write_timestamp(t.tomb().timestamp)
+            .write_deletion_time(t.tomb().deletion_time)
+        .end_tomb()
+        .write_is_shadowable(t.is_shadowable())
+    .end_deleted_at();
+}
+
 template<typename Writer>
 void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp)
 {
@@ -197,12 +207,7 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
     for (auto&& cr : mp.clustered_rows()) {
         auto marker_writer = clustering_rows.add().write_key(cr.key());
         auto deleted_at_writer = write_row_marker(std::move(marker_writer), cr.row().marker());
-        auto&& dt = cr.row().deleted_at();
-        auto row_writer = std::move(deleted_at_writer).start_deleted_at()
-                                                          .write_timestamp(dt.timestamp)
-                                                          .write_deletion_time(dt.deletion_time)
-                                                      .end_deleted_at()
-                                                      .start_cells();
+        auto row_writer = write_row_tombstone(std::move(deleted_at_writer), cr.row().deleted_at()).start_cells();
         write_row_cells(std::move(row_writer), cr.row().cells(), s, column_kind::regular_column).end_cells().end_deletable_row();
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
@@ -244,12 +249,7 @@ void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone
         auto& cr = crs.front();
         auto marker_writer = clustering_rows.add().write_key(cr.key());
         auto deleted_at_writer = write_row_marker(std::move(marker_writer), cr.marker());
-        auto&& dt = cr.tomb();
-        auto row_writer = std::move(deleted_at_writer).start_deleted_at()
-                                                          .write_timestamp(dt.timestamp)
-                                                          .write_deletion_time(dt.deletion_time)
-                                                      .end_deleted_at()
-                                                      .start_cells();
+        auto row_writer = write_row_tombstone(std::move(deleted_at_writer), cr.tomb()).start_cells();
         write_row_cells(std::move(row_writer), cr.cells(), s, column_kind::regular_column).end_cells().end_deletable_row();
         crs.pop_front();
     }

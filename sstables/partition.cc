@@ -693,7 +693,7 @@ public:
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
                 if (!_skip_in_progress) {
-                    _in_progress->as_mutable_clustering_row().apply(tombstone(deltime));
+                    _in_progress->as_mutable_clustering_row().apply(row_tombstone::regular(deltime));
                 }
                 return ret;
             } else {
