@@ -26,12 +26,13 @@
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "hashing.hh"
+#include "utils/generate_inequality_from_tri_compare.hh"
 
 /**
  * Represents deletion operation. Can be commuted with other tombstones via apply() method.
  * Can be empty.
  */
-struct tombstone final {
+struct tombstone final : public generate_inequality_from_tri_compare<tombstone> {
     api::timestamp_type timestamp;
     gc_clock::time_point deletion_time;
 
@@ -60,26 +61,6 @@ struct tombstone final {
 
     bool operator<(const tombstone& t) const {
         return compare(t) < 0;
-    }
-
-    bool operator<=(const tombstone& t) const {
-        return compare(t) <= 0;
-    }
-
-    bool operator>(const tombstone& t) const {
-        return compare(t) > 0;
-    }
-
-    bool operator>=(const tombstone& t) const {
-        return compare(t) >= 0;
-    }
-
-    bool operator==(const tombstone& t) const {
-        return compare(t) == 0;
-    }
-
-    bool operator!=(const tombstone& t) const {
-        return compare(t) != 0;
     }
 
     explicit operator bool() const {
