@@ -440,15 +440,15 @@ public:
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
     prepare(const std::experimental::string_view& query_string, const service::client_state& client_state, bool for_thrift);
 
-    static bytes compute_id(const std::experimental::string_view& query_string, const sstring& keyspace);
-    static int32_t compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace);
+    static bytes compute_id(const sstring_view& id);
+    static int32_t compute_thrift_id(const sstring_view& id);
 
 private:
     ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
+    get_stored_prepared_statement(const sstring_view& id, bool for_thrift);
 
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, std::unique_ptr<statements::prepared_statement> prepared, bool for_thrift);
+    store_prepared_statement(const sstring_view& query_string, const sstring_view& id, std::unique_ptr<statements::prepared_statement> prepared, bool for_thrift);
 
     // Erases the statements for which filter returns true.
     template <typename Pred>
