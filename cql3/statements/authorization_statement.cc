@@ -88,3 +88,7 @@ void cql3::statements::authorization_statement::mayme_correct_resource(auth::dat
     }
 }
 
+sstring cql3::statements::authorization_statement::prepared_id(const stdx::string_view& query_string, const database& db) const {
+    return query_string.to_string();
+}
+

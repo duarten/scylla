@@ -45,6 +45,7 @@
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/stats.hh"
+#include "stdx.hh"
 
 #include <seastar/core/shared_ptr.hh>
 
@@ -74,6 +75,8 @@ public:
     virtual std::unique_ptr<prepared_statement> prepare(database& db, cql_stats& stats) = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const;
+
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const = 0;
 };
 
 }

@@ -660,6 +660,10 @@ modification_statement::modification_statement(::shared_ptr<cf_name> name, ::sha
     , _if_exists{if_exists}
 { }
 
+sstring modification_statement::prepared_id(const stdx::string_view& query_string, const database& db) const {
+    return keyspace() + query_string.to_string() + db.find_schema(keyspace(), column_family())->version().to_sstring();
+}
+
 }
 
 }

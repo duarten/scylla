@@ -385,6 +385,10 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
     _column_aliases.emplace_back(alias);
 }
 
+sstring create_table_statement::raw_statement::prepared_id(const stdx::string_view& query_string, const database& db) const {
+    return keyspace() + query_string.to_string();
+}
+
 }
 
 }

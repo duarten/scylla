@@ -59,6 +59,10 @@ public:
     use_statement(sstring keyspace);
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const override {
+        return _keyspace + query_string.to_string();
+    }
 };
 
 }

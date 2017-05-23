@@ -85,6 +85,7 @@ protected:
 public:
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
     ::shared_ptr<cql3::statements::modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names, cql_stats& stats);
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const;
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats) = 0;

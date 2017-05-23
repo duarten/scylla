@@ -649,6 +649,10 @@ bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
         int32_type);
 }
 
+sstring select_statement::prepared_id(const stdx::string_view& query_string, const database& db) const {
+    return keyspace() + query_string.to_string() + db.find_schema(keyspace(), column_family())->version().to_sstring();
+}
+
 }
 
 }

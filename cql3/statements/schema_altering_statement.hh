@@ -88,6 +88,8 @@ protected:
 
     virtual future<::shared_ptr<messages::result_message>>
     execute_internal(distributed<service::storage_proxy>&, service::query_state& state, const query_options& options) override;
+
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const override;
 };
 
 }

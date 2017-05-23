@@ -68,6 +68,8 @@ public:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
+
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const override;
 };
 
 }

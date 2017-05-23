@@ -148,6 +148,8 @@ public:
     void add_key_aliases(const std::vector<::shared_ptr<column_identifier>> aliases);
 
     void add_column_alias(::shared_ptr<column_identifier> alias);
+
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const override;
 };
 
 }

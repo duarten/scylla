@@ -111,6 +111,10 @@ schema_altering_statement::execute_internal(distributed<service::storage_proxy>&
     return execute0(proxy, state, options, true);
 }
 
+sstring schema_altering_statement::prepared_id(const stdx::string_view& query_string, const database& db) const {
+    return keyspace() + query_string.to_string();
+}
+
 }
 
 }

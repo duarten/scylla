@@ -108,6 +108,10 @@ truncate_statement::execute_internal(distributed<service::storage_proxy>& proxy,
     throw std::runtime_error("unsupported operation");
 }
 
+sstring truncate_statement::prepared_id(const stdx::string_view& query_string, const database& db) const {
+    return keyspace() + query_string.to_string();
+}
+
 }
 
 }

@@ -105,6 +105,7 @@ public:
         return prepare(db, stats, false);
     }
     std::unique_ptr<prepared> prepare(database& db, cql_stats& stats, bool for_view);
+    sstring prepared_id(const stdx::string_view& query_string, const database& db) const;
 private:
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
         database& db,

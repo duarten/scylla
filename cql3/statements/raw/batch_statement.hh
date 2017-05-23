@@ -84,6 +84,11 @@ public:
         }
     }
 
+    virtual sstring prepared_id(const stdx::string_view& query_string, const database& db) const {
+        assert(!_parsed_statements.empty());
+        return _parsed_statements.front()->keyspace() + query_string.to_string();
+    }
+
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
 
