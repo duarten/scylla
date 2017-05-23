@@ -149,7 +149,8 @@ query_processor::process(const sstring_view& query_string, service::query_state&
 {
     log.trace("process: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state());
+    ::shared_ptr<statements::raw::parsed_statement> statement = parse_statement_and_prepare_keyspace(query_string, query_state.get_client_state());
+    auto p = get_statement(statement);
     options.prepare(p->bound_names);
     auto cql_statement = p->statement;
     if (cql_statement->get_bound_terms() != options.get_values_count()) {
@@ -214,7 +215,8 @@ query_processor::prepare(const std::experimental::string_view& query_string,
     }
 
     return futurize<::shared_ptr<cql_transport::messages::result_message::prepared>>::apply([this, &query_string, &client_state, for_thrift] {
-        auto prepared = get_statement(query_string, client_state);
+        auto p = parse_statement_and_prepare_keyspace(query_string, client_state);
+        auto prepared = get_statement(p);
         auto bound_terms = prepared->statement->get_bound_terms();
         if (bound_terms > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
@@ -305,18 +307,8 @@ int32_t query_processor::compute_thrift_id(const std::experimental::string_view&
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(const sstring_view& query, const service::client_state& client_state)
+query_processor::get_statement(const ::shared_ptr<raw::parsed_statement>& statement)
 {
-#if 0
-        Tracing.trace("Parsing {}", queryStr);
-#endif
-    ::shared_ptr<raw::parsed_statement> statement = parse_statement(query);
-
-    // Set keyspace for statement that require login
-    auto cf_stmt = dynamic_pointer_cast<raw::cf_statement>(statement);
-    if (cf_stmt) {
-        cf_stmt->prepare_keyspace(client_state);
-    }
 #if 0
         Tracing.trace("Preparing statement");
 #endif
@@ -325,8 +317,22 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 }
 
 ::shared_ptr<raw::parsed_statement>
+query_processor::parse_statement_and_prepare_keyspace(const sstring_view& query, const service::client_state& client_state)
+{
+    auto statement = parse_statement(query);
+    auto cf_stmt = dynamic_pointer_cast<raw::cf_statement>(statement);
+    if (cf_stmt) {
+        cf_stmt->prepare_keyspace(client_state);
+    }
+    return statement;
+}
+
+::shared_ptr<raw::parsed_statement>
 query_processor::parse_statement(const sstring_view& query)
 {
+#if 0
+        Tracing.trace("Parsing {}", queryStr);
+#endif
     try {
         auto statement = util::do_with_parser(query,  std::mem_fn(&cql3_parser::CqlParser::query));
         if (!statement) {

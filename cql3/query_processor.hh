@@ -500,9 +500,10 @@ public:
     future<::shared_ptr<cql_transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
             service::query_state& query_state, query_options& options);
 
-    std::unique_ptr<statements::prepared_statement> get_statement(const std::experimental::string_view& query,
-            const service::client_state& client_state);
+    std::unique_ptr<statements::prepared_statement> get_statement(const ::shared_ptr<statements::raw::parsed_statement>& statement);
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
+    static ::shared_ptr<statements::raw::parsed_statement> parse_statement_and_prepare_keyspace(const std::experimental::string_view& query,
+            const service::client_state& client_state);
 
 #if 0
     private static long measure(Object key)

@@ -922,7 +922,8 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
         switch (kind) {
         case 0: {
             auto query = read_long_string_view(buf).to_string();
-            stmt_ptr = _server._query_processor.local().get_statement(query, client_state);
+            auto stmt = _server._query_processor.local().parse_statement_and_prepare_keyspace(query, client_state);
+            stmt_ptr = _server._query_processor.local().get_statement(stmt);
             ps = stmt_ptr->checked_weak_from_this();
             break;
         }
