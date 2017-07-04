@@ -118,21 +118,27 @@ column_family::make_memory_only_memtable_list() {
 
 lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
-    auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_memtable(behavior); };
+    auto seal = [this] (memtable_list::flush_behavior behavior, flush_permit&& permit) {
+        return seal_active_memtable(behavior, std::move(permit));
+    };
     auto get_schema = [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
-    auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_streaming_memtable(behavior); };
+    auto seal = [this] (memtable_list::flush_behavior behavior, flush_permit&& permit) {
+        return seal_active_streaming_memtable(behavior, std::move(permit));
+    };
     auto get_schema =  [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
-    auto seal = [this, &smb] (memtable_list::flush_behavior) { return seal_active_streaming_memtable_big(smb); };
+    auto seal = [this, &smb] (memtable_list::flush_behavior, flush_permit&& permit) {
+        return seal_active_streaming_memtable_big(smb, std::move(permit));
+    };
     auto get_schema =  [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
@@ -837,7 +843,7 @@ column_family::update_cache(memtable& m, lw_shared_ptr<sstables::sstable_set> ol
 // at the PREPARE messages, and then noting what is the minimum future we should be
 // waiting for.
 future<>
-column_family::seal_active_streaming_memtable_delayed() {
+column_family::seal_active_streaming_memtable_delayed(flush_permit&& ignored) {
     auto old = _streaming_memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
@@ -859,7 +865,7 @@ column_family::seal_active_streaming_memtable_delayed() {
 }
 
 future<>
-column_family::seal_active_streaming_memtable_immediate() {
+column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
     auto old = _streaming_memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
@@ -868,12 +874,12 @@ column_family::seal_active_streaming_memtable_immediate() {
     _streaming_memtables->erase(old);
 
     auto guard = _streaming_flush_phaser.start();
-    return with_gate(_streaming_flush_gate, [this, old] {
+    return with_gate(_streaming_flush_gate, [this, old, permit = std::move(permit)] () mutable {
         _delayed_streaming_flush.cancel();
         auto current_waiters = std::exchange(_waiting_streaming_flushes, shared_promise<>());
         auto f = current_waiters.get_shared_future(); // for this seal
 
-        with_lock(_sstables_lock.for_read(), [this, old] {
+        with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
             auto newtab = make_lw_shared<sstables::sstable>(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
@@ -890,7 +896,8 @@ column_family::seal_active_streaming_memtable_immediate() {
             //
             // Lastly, we don't have any commitlog RP to update, and we don't need to deal manipulate the
             // memtable list, since this memtable was not available for reading up until this point.
-            return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority).then([this, newtab, old] {
+            return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority).then([this, newtab, old, permit = std::move(permit)] {
+                // We release the flush permit here to allow another flush to happen concurrently to keep the disk active.
                 return newtab->open_data();
             }).then([this, old, newtab] () {
                 add_sstable(newtab, {engine().cpu_id()});
@@ -919,16 +926,16 @@ column_family::seal_active_streaming_memtable_immediate() {
     }).finally([guard = std::move(guard)] { });
 }
 
-future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_big& smb) {
+future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_big& smb, flush_permit&& permit) {
     auto old = smb.memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
     }
     smb.memtables->add_memtable();
     smb.memtables->erase(old);
-    return with_gate(_streaming_flush_gate, [this, old, &smb] {
-        return with_gate(smb.flush_in_progress, [this, old, &smb] {
-            return with_lock(_sstables_lock.for_read(), [this, old, &smb] {
+    return with_gate(_streaming_flush_gate, [this, old, &smb, permit = std::move(permit)] () mutable {
+        return with_gate(smb.flush_in_progress, [this, old, &smb, permit = std::move(permit)] () mutable {
+            return with_lock(_sstables_lock.for_read(), [this, old, &smb, permit = std::move(permit)] () mutable {
                 auto newtab = make_lw_shared<sstables::sstable>(_schema,
                                                                 _config.datadir, calculate_generation_for_new_table(),
                                                                 sstables::sstable::version_types::ka,
@@ -937,7 +944,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 newtab->set_unshared();
 
                 auto&& priority = service::get_local_streaming_write_priority();
-                return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, true).then([this, newtab, old, &smb] {
+                return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, true).then([this, newtab, old, &smb, permit = std::move(permit)] {
                     smb.sstables.emplace_back(newtab);
                 }).handle_exception([] (auto ep) {
                     dblog.error("failed to write streamed sstable: {}", ep);
@@ -949,7 +956,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
 }
 
 future<>
-column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
+column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush_permit&& permit) {
     auto old = _memtables->back();
     dblog.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->cf_name(), _schema->ks_name(), old->partition_count(), old->occupancy());
 
@@ -964,16 +971,16 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
     );
     _highest_flushed_rp = old->replay_position();
 
-    return _flush_queue->run_cf_flush(old->replay_position(), [old, this] {
+    return _flush_queue->run_cf_flush(old->replay_position(), [old, this, permit = std::move(permit)] () mutable {
       auto memtable_size = old->occupancy().total_space();
 
       _config.cf_stats->pending_memtables_flushes_count++;
       _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
-      return repeat([this, old] {
-        return with_lock(_sstables_lock.for_read(), [this, old] {
+      return repeat([this, old, permit = std::move(permit)] () mutable {
+        return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
             _flush_queue->check_open_gate();
-            return try_flush_memtable_to_sstable(old);
+            return try_flush_memtable_to_sstable(old, std::move(permit));
         });
       }).then([this, memtable_size] {
         _config.cf_stats->pending_memtables_flushes_count--;
@@ -989,7 +996,7 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
 }
 
 future<stop_iteration>
-column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
+column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, flush_permit&& permit) {
     auto gen = calculate_generation_for_new_table();
 
     auto newtab = make_lw_shared<sstables::sstable>(_schema,
@@ -1011,7 +1018,12 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
     auto&& priority = service::get_local_memtable_flush_priority();
-    return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority).then([this, newtab, old] {
+    return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority).finally([permit = std::move(permit)] {
+        // We need to start a flush before the current one finishes, otherwise
+        // we'll have a period without significant disk activity when the current
+        // SSTable is being sealed, the caches are being updated, etc. To do that,
+        // we ensure the permit doesn't outlive this continuation.
+    }).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
@@ -3100,21 +3112,11 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this);
 }
 
-future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {
-    auto* region = &(mtlist.back()->region());
+future<> dirty_memory_manager::flush_one(memtable_list& mtlist, flush_permit&& permit) {
     auto schema = mtlist.back()->schema();
 
-    add_to_flush_manager(region, std::move(permit));
-    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, schema] (auto permit) mutable {
-        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, schema, permit = std::move(permit)] (auto f) {
-            // There are two cases in which we may still need to remove the permits from here.
-            //
-            // 1) Some exception happenend, and we can't know at which point. It could be that because
-            //    of that, the permits are still dangling. We have to remove it.
-            // 2) If we are using a memory-only Column Family. That will never create a memtable
-            //    flush object, and we'll never get rid of the permits. So we have to remove it
-            //    here.
-            this->remove_from_flush_manager(region);
+    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, schema, permit = std::move(permit)] (auto background_permit) mutable {
+        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate, std::move(permit)).then_wrapped([this, schema, permit = std::move(background_permit)] (auto f) {
             if (f.failed()) {
                 dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
             }
@@ -3839,7 +3841,7 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::part
     // temporary counter measure.
     return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] () mutable {
         return flush_streaming_big_mutations(plan_id).then([this, ranges = std::move(ranges)] (auto sstables) mutable {
-            return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).then([this] {
+            return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed, flush_permit::unconditional()).then([this] {
                 return _streaming_flush_phaser.advance_and_await();
             }).then([this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
                 for (auto&& sst : sstables) {

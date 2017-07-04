@@ -119,6 +119,24 @@ class replay_position_reordered_exception : public std::exception {};
 using shared_memtable = lw_shared_ptr<memtable>;
 class memtable_list;
 
+class flush_permit final {
+    stdx::optional<semaphore_units<>> _permit;
+
+    flush_permit() noexcept = default;
+    flush_permit(semaphore_units<>&& units) noexcept
+            : _permit{std::move(units)} {
+    }
+
+    friend class dirty_memory_manager;
+public:
+    flush_permit(flush_permit&&) noexcept = default;
+    flush_permit& operator=(flush_permit&&) noexcept = default;
+
+    static flush_permit unconditional() {
+        return flush_permit();
+    }
+};
+
 class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // We need a separate boolean, because from the LSA point of view, pressure may still be
     // mounting, in which case the pressure flag could be set back on if we force it off.
@@ -145,17 +163,6 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     int64_t _dirty_bytes_released_pre_accounted = 0;
 
     future<> flush_when_needed();
-    struct flush_permit {
-        semaphore_units<> permit;
-
-        flush_permit(semaphore_units<>&& permit) : permit(std::move(permit)) {}
-    };
-
-    // We need to start a flush before the current one finishes, otherwise
-    // we'll have a period without significant disk activity when the current
-    // SSTable is being sealed, the caches are being updated, etc. To do that
-    // we need to keep track of who is it that we are flushing this memory from.
-    std::unordered_map<const logalloc::region*, flush_permit> _flush_manager;
 
     future<> _waiting_flush;
     virtual void start_reclaiming() noexcept override;
@@ -166,6 +173,8 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
 
     seastar::metrics::metric_groups _metrics;
 public:
+
+
     void setup_collectd(sstring namestr);
 
     future<> shutdown();
@@ -237,26 +246,6 @@ public:
         _dirty_bytes_released_pre_accounted += delta;
     }
 
-    // This can be called multiple times during the lifetime of the region, and should always
-    // ultimately be called after the flush ends. However, some flushers may decide to call it
-    // earlier. For instance, the normal memtables sealing function will call this before updating
-    // the cache.
-    //
-    // Also, for sealing methods like the normal memtable sealing method - that may retry after a
-    // failed write, calling this method after the attempt is completed with success or failure is
-    // mandatory. That's because the new attempt will create a new flush reader for the same
-    // SSTable, so we need to make sure that we revert the old charges.
-    void remove_from_flush_manager(const logalloc::region *region) {
-        auto it = _flush_manager.find(region);
-        if (it != _flush_manager.end()) {
-            _flush_manager.erase(it);
-        }
-    }
-
-    void add_to_flush_manager(const logalloc::region *region, flush_permit&& permit) {
-        _flush_manager.emplace(region, std::move(permit));
-    }
-
     size_t real_dirty_memory() const {
         return _region_group.memory_used() + _dirty_bytes_released_pre_accounted;
     }
@@ -265,10 +254,12 @@ public:
         return _region_group.memory_used();
     }
 
-    future<> flush_one(memtable_list& cf, semaphore_units<> permit);
+    future<> flush_one(memtable_list& cf, flush_permit&& permit);
 
-    future<semaphore_units<>> get_flush_permit() {
-        return get_units(_flush_serializer, 1);
+    future<flush_permit> get_flush_permit() {
+        return get_units(_flush_serializer, 1).then([] (auto&& units) {
+            return flush_permit(std::move(units));
+        });
     }
 };
 
@@ -295,14 +286,15 @@ extern thread_local dirty_memory_manager default_dirty_memory_manager;
 class memtable_list {
 public:
     enum class flush_behavior { delayed, immediate };
+    using seal_fn_type = std::function<future<> (flush_behavior, flush_permit&&)>;
 private:
     std::vector<shared_memtable> _memtables;
-    std::function<future<> (flush_behavior)> _seal_fn;
+    seal_fn_type _seal_fn;
     std::function<schema_ptr()> _current_schema;
     dirty_memory_manager* _dirty_memory_manager;
     std::experimental::optional<shared_promise<>> _flush_coalescing;
 public:
-    memtable_list(std::function<future<> (flush_behavior)> seal_fn, std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager)
+    memtable_list(seal_fn_type seal_fn, std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager)
         : _memtables({})
         , _seal_fn(seal_fn)
         , _current_schema(cs)
@@ -338,8 +330,8 @@ public:
         return _memtables.size();
     }
 
-    future<> seal_active_memtable(flush_behavior behavior) {
-        return _seal_fn(behavior);
+    future<> seal_active_memtable(flush_behavior behavior, flush_permit&& permit) {
+        return _seal_fn(behavior, std::move(permit));
     }
 
     auto begin() noexcept {
@@ -506,7 +498,7 @@ private:
 
     future<std::vector<sstables::shared_sstable>> flush_streaming_big_mutations(utils::UUID plan_id);
     void apply_streaming_big_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m);
-    future<> seal_active_streaming_memtable_big(streaming_memtable_big& smb);
+    future<> seal_active_streaming_memtable_big(streaming_memtable_big& smb, flush_permit&&);
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();
@@ -585,7 +577,7 @@ private:
     void load_sstable(lw_shared_ptr<sstables::sstable>& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
-    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
+    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, flush_permit&& permit);
     future<> update_cache(memtable&, lw_shared_ptr<sstables::sstable_set> old_sstables);
     struct merge_comparator;
 
@@ -911,7 +903,7 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
-    future<> seal_active_memtable(memtable_list::flush_behavior behavior = memtable_list::flush_behavior::delayed);
+    future<> seal_active_memtable(memtable_list::flush_behavior behavior, flush_permit&&);
 
     // I am assuming here that the repair process will potentially send ranges containing
     // few mutations, definitely not enough to fill a memtable. It wants to know whether or
@@ -935,13 +927,13 @@ private:
     // that the incoming memtables will be coalesced together.
     shared_promise<> _waiting_streaming_flushes;
     timer<> _delayed_streaming_flush{[this] { _streaming_memtables->request_flush(); }};
-    future<> seal_active_streaming_memtable_delayed();
-    future<> seal_active_streaming_memtable_immediate();
-    future<> seal_active_streaming_memtable(memtable_list::flush_behavior behavior) {
+    future<> seal_active_streaming_memtable_delayed(flush_permit&&);
+    future<> seal_active_streaming_memtable_immediate(flush_permit&&);
+    future<> seal_active_streaming_memtable(memtable_list::flush_behavior behavior, flush_permit&& permit) {
         if (behavior == memtable_list::flush_behavior::delayed) {
-            return seal_active_streaming_memtable_delayed();
+            return seal_active_streaming_memtable_delayed(std::move(permit));
         } else if (behavior == memtable_list::flush_behavior::immediate) {
-            return seal_active_streaming_memtable_immediate();
+            return seal_active_streaming_memtable_immediate(std::move(permit));
         } else {
             // Impossible
             assert(0);
