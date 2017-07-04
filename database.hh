@@ -270,6 +270,20 @@ public:
     future<semaphore_units<>> get_flush_permit() {
         return get_units(_flush_serializer, 1);
     }
+
+    future<> get_flush_permit_and_add_to_flush_manager(const logalloc::region* region) {
+        return get_flush_permit().then([region, this] (auto&& permits) {
+            add_to_flush_manager(region, std::move(permits));
+        });
+    }
+
+    void pause_background_work() {
+        _background_work_flush_serializer.signal();
+    }
+
+    future<> resume_background_work() {
+        return _background_work_flush_serializer.wait();
+    }
 };
 
 extern thread_local dirty_memory_manager default_dirty_memory_manager;

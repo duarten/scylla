@@ -1049,10 +1049,15 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
             // If we failed this write we will try the write again and that will create a new flush reader
             // that will decrease dirty memory again. So we need to reset the accounting.
             old->revert_flushed_memory();
+            _config.dirty_memory_manager->pause_background_work();
+            return sleep(10s).then([this, old] {
+                return _config.dirty_memory_manager->get_flush_permit_and_add_to_flush_manager(&old->region()).then([this] {
+                    return _config.dirty_memory_manager->resume_background_work().then([] {
+                        return stop_iteration::no;
+                    });
+                });
+            });
         }
-        return sleep(10s).then([] {
-            return make_ready_future<stop_iteration>(stop_iteration::no);
-        });
     });
 }
 
