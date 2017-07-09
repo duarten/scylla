@@ -65,7 +65,6 @@
 #include <core/fstream.hh>
 #include <seastar/core/enum.hh>
 #include "utils/latency.hh"
-#include "utils/flush_queue.hh"
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
@@ -87,24 +86,6 @@ static const std::unordered_set<sstring> system_keyspaces = {
 static bool is_system_keyspace(const sstring& name) {
     return system_keyspaces.find(name) != system_keyspaces.end();
 }
-
-// Slight extension to the flush_queue type.
-class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {
-public:
-    template<typename Func, typename Post>
-    auto run_cf_flush(db::replay_position rp, Func&& func, Post&& post) {
-        // special case: empty rp, yet still data.
-        // We generate a few memtables with no valid, "high_rp", yet
-        // still containing data -> actual flush.
-        // And to make matters worse, we can initiate a flush of N such
-        // tables at the same time.
-        // Just queue them at the end of the queue and treat them as such.
-        if (rp == db::replay_position() && !empty()) {
-            rp = highest_key();
-        }
-        return run_with_ordered_post_op(rp, std::forward<Func>(func), std::forward<Post>(post));
-    }
-};
 
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
@@ -153,7 +134,6 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _cache(_schema, sstables_as_snapshot_source(), global_cache_tracker())
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
-    , _flush_queue(std::make_unique<memtable_flush_queue>())
     , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
 {
     if (!_config.enable_disk_writes) {
@@ -973,16 +953,14 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush
     );
     _highest_flushed_rp = old->replay_position();
 
-    return _flush_queue->run_cf_flush(old->replay_position(), [old, this, permit = std::move(permit)] () mutable {
-      auto memtable_size = old->occupancy().total_space();
+    auto memtable_size = old->occupancy().total_space();
 
-      _stats.pending_flushes++;
-      _config.cf_stats->pending_memtables_flushes_count++;
-      _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+    _stats.pending_flushes++;
+    _config.cf_stats->pending_memtables_flushes_count++;
+    _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
-      return repeat([this, old, permit = std::move(permit)] () mutable {
+    return repeat([this, old, permit = std::move(permit)] () mutable {
         return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
-            _flush_queue->check_open_gate();
             return try_flush_memtable_to_sstable(old, std::move(permit));
         }).then([this, &permit] (auto should_stop) mutable {
             if (should_stop) {
@@ -998,12 +976,10 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush
                 });
             });
         });
-      }).then([this, memtable_size] {
+    }).then([this, memtable_size, old, op = std::move(op)] {
         _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
-      });
-    }, [old, this, op = std::move(op)] {
         if (_commitlog) {
             _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
         }
