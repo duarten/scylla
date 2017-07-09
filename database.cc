@@ -948,11 +948,6 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush
     _stats.memtable_switch_count++;
     auto op = _flush_barrier.start();
 
-    assert(_highest_flushed_rp < old->replay_position()
-    || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
-    );
-    _highest_flushed_rp = old->replay_position();
-
     auto memtable_size = old->occupancy().total_space();
 
     _stats.pending_flushes++;
