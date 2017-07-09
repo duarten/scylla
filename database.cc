@@ -975,6 +975,7 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush
     return _flush_queue->run_cf_flush(old->replay_position(), [old, this, permit = std::move(permit)] () mutable {
       auto memtable_size = old->occupancy().total_space();
 
+      _stats.pending_flushes++;
       _config.cf_stats->pending_memtables_flushes_count++;
       _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
@@ -997,6 +998,7 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush
             });
         });
       }).then([this, memtable_size] {
+        _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
       });
@@ -3793,14 +3795,11 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
 }
 
 future<> column_family::flush() {
-    _stats.pending_flushes++;
-
     // highest_flushed_rp is only updated when we flush. If the memtable is currently alive, then
     // the most up2date replay position is the one that's in there now. Otherwise, if the memtable
     // hasn't received any writes yet, that's the one from the last flush we made.
     auto desired_rp = _memtables->back()->empty() ? _highest_flushed_rp : _memtables->back()->replay_position();
     return _memtables->request_flush().finally([this, desired_rp] {
-        _stats.pending_flushes--;
         // wait for all up until us.
         return _flush_queue->wait_for_pending(desired_rp);
     });
