@@ -261,6 +261,14 @@ public:
             return flush_permit(std::move(units));
         });
     }
+
+    void pause_background_work() {
+        _background_work_flush_serializer.signal();
+    }
+
+    future<> resume_background_work() {
+        return _background_work_flush_serializer.wait();
+    }
 };
 
 extern thread_local dirty_memory_manager default_dirty_memory_manager;

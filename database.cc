@@ -981,12 +981,18 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored, flush
         return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
             _flush_queue->check_open_gate();
             return try_flush_memtable_to_sstable(old, std::move(permit));
-        }).then([] (auto should_stop) {
+        }).then([this, &permit] (auto should_stop) mutable {
             if (should_stop) {
                 return make_ready_future<stop_iteration>(should_stop);
             }
-            return sleep(10s).then([] {
-                return make_ready_future<stop_iteration>(stop_iteration::no);
+            _config.dirty_memory_manager->pause_background_work();
+            return sleep(10s).then([this, &permit] () mutable {
+                return _config.dirty_memory_manager->get_flush_permit().then([this, &permit] (auto new_permit) mutable {
+                    permit = std::move(new_permit);
+                    return _config.dirty_memory_manager->resume_background_work().then([] {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    });
+                });
             });
         });
       }).then([this, memtable_size] {
