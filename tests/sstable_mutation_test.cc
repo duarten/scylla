@@ -375,7 +375,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
             mt->apply(m);
         }
 
-        sst->write_components(mt->make_reader(s), partitions.size(), s, cfg).get();
+        sst->write_components(mt->make_reader(s), partitions.size(), s, cfg, sstable_write_permit::unconditional()).get();
         sst->load().get();
 
         return as_mutation_source(sst);

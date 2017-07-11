@@ -396,7 +396,7 @@ public:
             auto&& priority = service::get_local_compaction_priority();
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
-            _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority));
+            _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, sstable_write_permit::unconditional(), priority));
         }
         return &*_writer;
     }
@@ -480,7 +480,7 @@ public:
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
             auto&& priority = service::get_local_compaction_priority();
-            writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority, _shard));
+            writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, sstable_write_permit::unconditional(), priority, _shard));
         }
         return &*writer;
     }
