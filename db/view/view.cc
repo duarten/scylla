@@ -791,7 +791,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // for the writes to complete.
 // FIXME: I dropped a lot of parameters the Cassandra version had,
 // we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
-void mutate_MV(const dht::token& base_token,
+future<> mutate_MV(const dht::token& base_token,
         std::vector<mutation> mutations)
 {
 #if 0
@@ -823,6 +823,7 @@ void mutate_MV(const dht::token& base_token,
                                                                                                           () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
             // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
 #endif
+    auto fs = std::make_unique<std::vector<future<>>>();
     for (auto& mut : mutations) {
         auto view_token = mut.token();
         auto keyspace_name = mut.schema()->ks_name();
@@ -838,16 +839,18 @@ void mutate_MV(const dht::token& base_token,
                     // do not wait for it to complete.
                     // Note also that mutate_locally(mut) copies mut (in
                     // frozen form) so don't need to increase its lifetime.
-                    service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
+                    fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
                         vlogger.error("Error applying local view update: {}", ep);
-                    });
+                        return make_exception_future<>(std::move(ep));
+                    }));
             } else {
                 // FIXME: Temporary hack: send the write directly to paired_endpoint,
                 // without a batchlog, and without checking for success
                 // Note we don't wait for the asynchronous operation to complete
-                service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
                     vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
-                });;
+                    return make_exception_future<>(std::move(ep));
+                }));
             }
             // When the ownership of the view partition is being moved to a
             // new node (or nodes), listed in pending_enpoints, we also need
@@ -855,9 +858,10 @@ void mutate_MV(const dht::token& base_token,
             // the base replicas, but this is probably excessive - see
             // See https://issues.apache.org/jira/browse/CASSANDRA-14262
             for (auto&& pending : pending_endpoints) {
-                service::get_local_storage_proxy().send_to_endpoint(mut, pending, db::write_type::VIEW).handle_exception([pending] (auto ep) {
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(mut, pending, db::write_type::VIEW).handle_exception([pending] (auto ep) {
                     vlogger.error("Error applying view update to pending endpoint {}: {}", pending, ep);
-                });;
+                    return make_exception_future<>(std::move(ep));
+                }));
             }
         } else {
 #if 0
@@ -900,6 +904,8 @@ void mutate_MV(const dht::token& base_token,
         viewWriteMetrics.addNano(System.nanoTime() - startTime);
     }
 #endif
+    auto f = seastar::when_all_succeed(fs->begin(), fs->end());
+    return f.finally([fs = std::move(fs)] { });
 }
 
 } // namespace view
