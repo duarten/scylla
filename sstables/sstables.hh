@@ -315,11 +315,13 @@ public:
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,
+            flush_permit&& permit,
             const io_priority_class& pc = default_priority_class());
 
     sstable_writer get_writer(const schema& s,
         uint64_t estimated_partitions,
         const sstable_writer_config&,
+        flush_permit&& permit,
         const io_priority_class& pc = default_priority_class(),
         shard_id shard = engine().cpu_id());
 
@@ -805,16 +807,17 @@ class sstable_writer {
     std::unique_ptr<file_writer> _writer;
     stdx::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
+    flush_permit&& _permit;
 private:
     void prepare_file_writer();
     void finish_file_writer();
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-            const sstable_writer_config&, const io_priority_class& pc, shard_id shard = engine().cpu_id());
+            const sstable_writer_config&, flush_permit&& permit, const io_priority_class& pc, shard_id shard = engine().cpu_id());
     ~sstable_writer();
     sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard) {}
+            _components_writer(std::move(o._components_writer)), _shard(o._shard), _permit(std::move(o._permit)) {}
     void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
     void consume(tombstone t) { _components_writer->consume(t); }
     stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }

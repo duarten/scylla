@@ -3409,7 +3409,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
 static
 shared_sstable make_sstable(sstring path, schema_ptr s, ::mutation_reader rd, sstable_writer_config cfg) {
     auto sst = make_lw_shared<sstable>(s, path, 1, sstables::sstable::version_types::ka, big);
-    sst->write_components(std::move(rd), 1, s, cfg).get();
+    sst->write_components(std::move(rd), 1, s, cfg, flush_permit::unconditional()).get();
     sst->load().get();
     return sst;
 }

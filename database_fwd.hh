@@ -24,6 +24,7 @@
 // database.hh
 class database;
 class memtable_list;
+class flush_permit;
 
 // mutation.hh
 class mutation;

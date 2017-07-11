@@ -33,7 +33,11 @@
 future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
+        flush_permit&& permit,
         bool backup = false,
         const io_priority_class& pc = default_priority_class(),
         bool leave_unsealed = false);
 
+future<>
+write_memtable_to_sstable(memtable& mt,
+        sstables::shared_sstable sst);

@@ -2101,13 +2101,14 @@ sstable_writer::~sstable_writer() {
 }
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-                               const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
+                               const sstable_writer_config& cfg, flush_permit&& permit, const io_priority_class& pc, shard_id shard)
     : _sst(sst)
     , _schema(s)
     , _pc(pc)
     , _backup(cfg.backup)
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
+    , _permit(std::move(permit))
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
@@ -2128,6 +2129,12 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_compression(_pc);
     _sst.write_scylla_metadata(_pc, _shard);
 
+    // We need to start a flush before the current one finishes, otherwise
+    // we'll have a period without significant disk activity when the current
+    // SSTable is being sealed, the caches are being updated, etc. To do that,
+    // we ensure the permit doesn't outlive this continuation.
+    _permit = flush_permit::unconditional();
+
     if (!_leave_unsealed) {
         _sst.seal_sstable(_backup).get();
     }
@@ -2146,18 +2153,23 @@ future<> sstable::seal_sstable(bool backup)
     });
 }
 
-sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
+sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, const sstable_writer_config& cfg, flush_permit&& permit, const io_priority_class& pc, shard_id shard)
 {
-    return sstable_writer(*this, s, estimated_partitions, cfg, pc, shard);
+    return sstable_writer(*this, s, estimated_partitions, cfg, std::move(permit), pc, shard);
 }
 
-future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, const sstable_writer_config& cfg, const io_priority_class& pc) {
+future<> sstable::write_components(
+        ::mutation_reader mr,
+        uint64_t estimated_partitions,
+        schema_ptr schema,
+        const sstable_writer_config& cfg,
+        flush_permit&& permit,
+        const io_priority_class& pc) {
     if (cfg.replay_position) {
         _collector.set_replay_position(cfg.replay_position.value());
     }
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
-        auto wr = get_writer(*schema, estimated_partitions, cfg, pc);
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, permit = std::move(permit), &pc] () mutable {
+        auto wr = get_writer(*schema, estimated_partitions, cfg, std::move(permit), pc);
         consume_flattened_in_thread(mr, wr);
     });
 }
