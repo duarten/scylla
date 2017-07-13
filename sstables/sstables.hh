@@ -52,6 +52,7 @@
 #include "atomic_deletion.hh"
 #include "sstables/shared_index_lists.hh"
 #include "db/commitlog/replay_position.hh"
+#include "dirty_memory_manager.hh"
 
 namespace sstables {
 
