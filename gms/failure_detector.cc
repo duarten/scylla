@@ -133,25 +133,13 @@ std::map<sstring, sstring> failure_detector::get_simple_states() {
 }
 
 int failure_detector::get_down_endpoint_count() {
-    int count = 0;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& state = entry.second;
-        if (!state.is_alive()) {
-            count++;
-        }
-    }
-    return count;
+    return get_local_gossiper().endpoint_state_map.size() - get_up_endpoint_count();
 }
 
 int failure_detector::get_up_endpoint_count() {
-    int count = 0;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& state = entry.second;
-        if (state.is_alive()) {
-            count++;
-        }
-    }
-    return count;
+    return boost::accumulate(get_local_gossiper().endpoint_state_map, 0, [] (auto& acc, auto& state) {
+        return acc + state.second.is_alive();
+    });
 }
 
 sstring failure_detector::get_endpoint_state(sstring address) {
