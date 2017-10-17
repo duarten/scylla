@@ -25,6 +25,8 @@ from distutils.spawn import find_executable
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
+srcdir = os.getcwd()
+
 for line in open('/etc/os-release'):
     key, _, value = line.partition('=')
     value = value.strip().strip('"')
@@ -156,12 +158,14 @@ modes = {
         'sanitize_libs': '-lasan -lubsan',
         'opt': '-O0 -DDEBUG -DDEBUG_SHARED_PTR -DDEFAULT_ALLOCATOR',
         'libs': '',
+        'xxhash_opts': '-DBUILD_SHARED_LIBS=OFF -DBUILD_XXHSUM=ON',
     },
     'release': {
         'sanitize': '',
         'sanitize_libs': '',
         'opt': '-O2',
         'libs': '',
+        'xxhash_opts': '-DBUILD_SHARED_LIBS=OFF -DBUILD_XXHSUM=ON',
     },
 }
 
@@ -846,6 +850,22 @@ libs = ' '.join(['-lyaml-cpp', '-llz4', '-lz', '-lsnappy', pkg_config("--libs", 
                  maybe_static(args.staticboost, '-lboost_date_time'),
                 ])
 
+# xxhash lib
+xxhash_dir = 'xxHash'
+xxhash_lib = 'xxhash-scylla'
+xxhash_src_lib = xxhash_dir + '/libxxhash.a'
+
+if not os.path.exists(xxhash_dir) or not os.listdir(xxhash_dir):
+    raise Exception(xxhash_dir + ' is empty. Run "git submodule update --init".')
+
+xxhash_sources = []
+for root, dirs, files in os.walk(xxhash_dir):
+    xxhash_sources += [os.path.join(root, file)
+                      for file in files
+                      if file.endswith('.h') or file.endswith('.c')]
+xxhash_sources = ' '.join(xxhash_sources)
+libs += ' -l' + xxhash_lib
+
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
@@ -903,17 +923,17 @@ with open(buildfile, 'w') as f:
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen
+            cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen -I$full_builddir/{mode}/xxhash
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} {sanitize_libs} -L$builddir/{mode} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} -L$builddir/{mode} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
@@ -936,6 +956,15 @@ with open(buildfile, 'w') as f:
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
+        f.write(textwrap.dedent('''\
+              rule xxhashmake_{mode}
+                command = make -C $builddir/{mode}/{xxhash_dir} CC={args.cc}
+              rule xxhashcmake_{mode}
+                command = mkdir -p $builddir/{mode}/{xxhash_dir} && cd $builddir/{mode}/{xxhash_dir} && CC={args.cc} cmake {xxhash_opts} {srcdir}/$in/cmake_unofficial
+              build $builddir/{mode}/{xxhash_dir}/Makefile : xxhashcmake_{mode} {xxhash_dir}
+              build $builddir/{mode}/{xxhash_src_lib} : xxhashmake_{mode} $builddir/{mode}/{xxhash_dir}/Makefile | {xxhash_sources}
+              build $builddir/{mode}/lib{xxhash_lib}.a : copy $builddir/{mode}/{xxhash_src_lib}
+            ''').format(xxhash_opts=(modeval['xxhash_opts']), **globals()))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
@@ -961,6 +990,10 @@ with open(buildfile, 'w') as f:
             if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
+                libdeps = str.join(' ', [
+                            'seastar/build/{mode}/libseastar.a'.format(mode = mode),
+                            '$builddir/{mode}/lib{xxhash_lib}.a'.format(**globals()),
+                            ])
                 if binary.startswith('tests/'):
                     local_libs = '$libs'
                     if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
@@ -972,15 +1005,12 @@ with open(buildfile, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
-                                                                                     'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs), libdeps))
                     f.write('   libs = {}\n'.format(local_libs))
-                    f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                                              'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}_g: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), libdeps))
                     f.write('   libs = {}\n'.format(local_libs))
                 else:
-                    f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                                            'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('build $builddir/{}/{}: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), libdeps))
                     if has_thrift:
                         f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
             for src in srcs:
