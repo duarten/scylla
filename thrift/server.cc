@@ -193,10 +193,10 @@ thrift_server::do_accepts(int which, bool keepalive) {
     _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) mutable {
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
-        auto conn = new connection(*this, std::move(fd), addr);
-        conn->process().then_wrapped([this, conn] (future<> f) {
+        auto conn = std::make_unique<connection>(*this, std::move(fd), addr);
+        auto pf = conn->process();
+        pf.then_wrapped([this, conn = std::move(conn)] (future<> f) {
             conn->shutdown();
-            delete conn;
             try {
                 f.get();
             } catch (std::exception& ex) {
