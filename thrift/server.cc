@@ -204,12 +204,9 @@ thrift_server::do_accepts(int which, bool keepalive) {
             }
         });
         do_accepts(which, keepalive);
-    }).then_wrapped([] (future<> f) {
-        try {
-            f.get();
-        } catch (std::exception& ex) {
-            std::cout << "accept failed: " << ex.what() << "\n";
-        }
+    }).handle_exception([this, which, keepalive] (auto ex) {
+        tlogger.debug("accept failed {}", ex);
+        do_accepts(which, keepalive);
     });
 }
 
