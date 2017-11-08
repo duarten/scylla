@@ -199,15 +199,15 @@ thrift_server::do_accepts(int which, bool keepalive) {
         fd.set_keepalive(keepalive);
         auto conn = std::make_unique<connection>(*this, std::move(fd), addr);
         with_gate(_stop_gate, [this, conn = std::move(conn)] () mutable {
-        auto pf = conn->process();
-        return pf.then_wrapped([this, conn = std::move(conn)] (future<> f) {
-            conn->shutdown();
-            try {
-                f.get();
-            } catch (std::exception& ex) {
-                tlogger.debug("request error {}", ex.what());
-            }
-        });
+            auto pf = conn->process();
+            return pf.then_wrapped([this, conn = std::move(conn)] (future<> f) {
+                conn->shutdown();
+                try {
+                    f.get();
+                } catch (std::exception& ex) {
+                    tlogger.debug("request error {}", ex.what());
+                }
+            });
         });
         do_accepts(which, keepalive);
     }).handle_exception([this, which, keepalive] (auto ex) {
