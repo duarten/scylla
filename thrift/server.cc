@@ -68,8 +68,9 @@ thrift_server::~thrift_server() {
 }
 
 future<> thrift_server::stop() {
+    auto f = _stop_gate.close();
     std::for_each(_connections_list.begin(), _connections_list.end(), std::mem_fn(&connection::shutdown));
-    return make_ready_future<>();
+    return f;
 }
 
 struct handler_deleter {
@@ -192,18 +193,23 @@ thrift_server::listen(ipv4_addr addr, bool keepalive) {
 
 void
 thrift_server::do_accepts(int which, bool keepalive) {
+    if (_stop_gate.is_closed()) {
+        return;
+    }
     _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) mutable {
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
         do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
-            return conn.process().then_wrapped([this] (future<> f) {
-                conn->shutdown();
+          return with_gate(_stop_gate, [this, &conn] {
+            return conn.process().then_wrapped([this, &conn] (future<> f) {
+                conn.shutdown();
                 try {
                     f.get();
                 } catch (std::exception& ex) {
                     tlogger.debug("request error {}", ex.what());
                 }
             });
+          });
         });
         do_accepts(which, keepalive);
     }).handle_exception([this, which, keepalive] (auto ex) {
