@@ -105,6 +105,8 @@ thrift_server::connection::~connection() {
     _server._connections_list.erase(_server._connections_list.iterator_to(*this));
 }
 
+thrift_server::connection::connection(connection&& other) = default;
+
 future<>
 thrift_server::connection::process() {
     return do_until([this] { return _read_buf.eof(); },
