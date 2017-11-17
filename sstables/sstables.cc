@@ -353,6 +353,26 @@ inline void write(file_writer& out, const First& first, Rest&&... rest) {
     write(out, std::forward<Rest>(rest)...);
 }
 
+inline void write(bytes::iterator) { }
+
+template<typename First, typename... Rest>
+GCC6_CONCEPT(requires requires(First& x) {
+    static_cast<bytes_view>(x);
+})
+inline void write(bytes::iterator out, const First& first, Rest&&... rest) {
+    out = std::copy(static_cast<bytes_view>(first).begin(), static_cast<bytes_view>(first).end(), out);
+    write(out, std::forward<Rest>(rest)...);
+}
+
+struct write_to_buffer_tag {};
+
+template<typename... Args>
+inline bytes write(write_to_buffer_tag, uint16_t size, Args&&... args){
+    bytes buf(bytes::initialized_later(), size);
+    write(buf.begin(), std::forward<Args>(args)...);
+    return buf;
+}
+
 // Intended to be used for a type that describes itself through describe_type().
 template <class T>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
@@ -1432,6 +1452,38 @@ static composite::eoc bound_kind_to_end_marker(bound_kind end_kind) {
          : composite::eoc::end;
 }
 
+template<typename Writer>
+static auto write_column_name(Writer&& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    // was defined in the schema, for example.
+    auto c = composite::from_exploded(column_names, marker);
+    auto ck_bview = bytes_view(clustering_key);
+
+    // The marker is not a component, so if the last component is empty (IOW,
+    // only serializes to the marker), then we just replace the key's last byte
+    // with the marker. If the component however it is not empty, then the
+    // marker should be in the end of it, and we just join them together as we
+    // do for any normal component
+    if (c.size() == 1) {
+        ck_bview.remove_suffix(1);
+    }
+    size_t sz = ck_bview.size() + c.size();
+    if (sz > std::numeric_limits<uint16_t>::max()) {
+        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+    }
+    uint16_t sz16 = sz;
+    return write(out, sz16, ck_bview, c);
+}
+
+template<typename Writer>
+static auto write_column_name(Writer&& out, bytes_view column_names) {
+    size_t sz = column_names.size();
+    if (sz > std::numeric_limits<uint16_t>::max()) {
+        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+    }
+    uint16_t sz16 = sz;
+    return write(out, sz16, column_names);
+}
+
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
         const bytes& first_col,
         const bytes& last_col,
@@ -1448,29 +1500,6 @@ static void output_promoted_index_entry(bytes_ostream& promoted_index,
     promoted_index.write(q, 8);
     write_be(q, uint64_t(width));
     promoted_index.write(q, 8);
-}
-
-// FIXME: use this in write_column_name() instead of repeating the code
-static bytes serialize_colname(const composite& clustering_key,
-        const std::vector<bytes_view>& column_names, composite::eoc marker) {
-    auto c = composite::from_exploded(column_names, marker);
-    auto ck_bview = bytes_view(clustering_key);
-    // The marker is not a component, so if the last component is empty (IOW,
-    // only serializes to the marker), then we just replace the key's last byte
-    // with the marker. If the component however it is not empty, then the
-    // marker should be in the end of it, and we just join them together as we
-    // do for any normal component
-    if (c.size() == 1) {
-        ck_bview.remove_suffix(1);
-    }
-    size_t sz = ck_bview.size() + c.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    bytes colname(bytes::initialized_later(), sz);
-    std::copy(ck_bview.begin(), ck_bview.end(), colname.begin());
-    std::copy(c.get_bytes().begin(), c.get_bytes().end(), colname.begin() + ck_bview.size());
-    return colname;
 }
 
 // Call maybe_flush_pi_block() before writing the given sstable atom to the
@@ -1490,7 +1519,7 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         const composite& clustering_key,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
-    bytes colname = serialize_colname(clustering_key, column_names, marker);
+    bytes colname = write_column_name(write_to_buffer_tag(), clustering_key, column_names, marker);
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
         // closed a promoted-index block. Remember its name and position -
@@ -1536,37 +1565,6 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         _pi_write.block_last_colname = std::move(colname);
     }
 }
-
-void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker) {
-    // was defined in the schema, for example.
-    auto c = composite::from_exploded(column_names, marker);
-    auto ck_bview = bytes_view(clustering_key);
-
-    // The marker is not a component, so if the last component is empty (IOW,
-    // only serializes to the marker), then we just replace the key's last byte
-    // with the marker. If the component however it is not empty, then the
-    // marker should be in the end of it, and we just join them together as we
-    // do for any normal component
-    if (c.size() == 1) {
-        ck_bview.remove_suffix(1);
-    }
-    size_t sz = ck_bview.size() + c.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    uint16_t sz16 = sz;
-    write(out, sz16, ck_bview, c);
-}
-
-void sstable::write_column_name(file_writer& out, bytes_view column_names) {
-    size_t sz = column_names.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    uint16_t sz16 = sz;
-    write(out, sz16, column_names);
-}
-
 
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
     c_stats.update_min_timestamp(timestamp);
