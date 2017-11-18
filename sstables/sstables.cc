@@ -1766,9 +1766,9 @@ void sstable::write_range_tombstone(file_writer& out,
     if (!_schema->is_compound() && (start_marker == composite::eoc::end || end_marker == composite::eoc::start)) {
         throw std::logic_error(sprint("Cannot represent marker type in range tombstone for non-compound schemas"));
     }
-    write_column_name(out, start, suffix, start_marker);
+    write_column_name(out, *_schema, start, suffix, start_marker);
     write(out, mask);
-    write_column_name(out, end, suffix, end_marker);
+    write_column_name(out, *_schema, end, suffix, end_marker);
     write_deletion_time(out, t);
 }
 
@@ -1777,7 +1777,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
     auto mview = t->deserialize_mutation_form(collection);
     const bytes& column_name = cdef.name();
     if (mview.tomb) {
-        write_range_tombstone(out, clustering_key, clustering_key, {bytes_view(column_name)}, mview.tomb);
+        write_range_tombstone(out, clustering_key, composite::eoc::start, clustering_key, composite::eoc::end, { column_name }, mview.tomb);
     }
     for (auto& cp: mview.cells) {
         maybe_flush_pi_block(out, clustering_key, { column_name, cp.first });
