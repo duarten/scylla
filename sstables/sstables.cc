@@ -1476,28 +1476,6 @@ static composite::eoc bound_kind_to_end_marker(bound_kind end_kind) {
 }
 
 template<typename Writer>
-static auto write_column_name(Writer&& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
-    // was defined in the schema, for example.
-    auto c = composite::from_exploded(column_names, marker);
-    auto ck_bview = bytes_view(clustering_key);
-
-    // The marker is not a component, so if the last component is empty (IOW,
-    // only serializes to the marker), then we just replace the key's last byte
-    // with the marker. If the component however it is not empty, then the
-    // marker should be in the end of it, and we just join them together as we
-    // do for any normal component
-    if (c.size() == 1) {
-        ck_bview.remove_suffix(1);
-    }
-    size_t sz = ck_bview.size() + c.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    uint16_t sz16 = sz;
-    return write(out, sz16, ck_bview, c);
-}
-
-template<typename Writer>
 static auto write_column_name(Writer&& out, bytes_view column_names) {
     size_t sz = column_names.size();
     if (sz > std::numeric_limits<uint16_t>::max()) {
@@ -1509,11 +1487,30 @@ static auto write_column_name(Writer&& out, bytes_view column_names) {
 
 template<typename Writer>
 static auto write_column_name(Writer&& out, const schema& s, const composite& clustering, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    auto do_write_column_name = [&] {
+        auto c = composite::from_exploded(column_names, marker);
+        auto ck_bview = bytes_view(clustering);
+
+        // The marker is not a component, so if the last component is empty (IOW,
+        // only serializes to the marker), then we just replace the key's last byte
+        // with the marker. If the component however it is not empty, then the
+        // marker should be in the end of it, and we just join them together as we
+        // do for any normal component
+        if (c.size() == 1) {
+            ck_bview.remove_suffix(1);
+        }
+        size_t sz = ck_bview.size() + c.size();
+        if (sz > std::numeric_limits<uint16_t>::max()) {
+            throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+        }
+        uint16_t sz16 = sz;
+        return write(out, sz16, ck_bview, c);
+    };
     if (s.is_compound()) {
         if (s.is_dense()) {
             return write_column_name(out, bytes_view(clustering));
         } else {
-            return write_column_name(out, clustering, column_names, marker);
+            return do_write_column_name();
         }
     } else {
         if (s.is_dense()) {
