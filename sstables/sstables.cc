@@ -1560,6 +1560,13 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         return;
     }
     bytes colname = write_column_name(write_to_buffer_tag(), *_schema, clustering_key, column_names, marker);
+    maybe_flush_pi_block(out, clustering_key, std::move(colname));
+}
+
+// Overload can only be called if the schema has clustering keys.
+void sstable::maybe_flush_pi_block(file_writer& out,
+        const composite& clustering_key,
+        bytes colname) {
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
         // closed a promoted-index block. Remember its name and position -
@@ -1694,8 +1701,7 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
         return;
     }
     // Write row mark cell to the beginning of clustered row.
-    maybe_flush_pi_block(out, clustering_key, { bytes_view() });
-    write_column_name(out, schema, clustering_key, { bytes_view() });
+    index_and_write_column_name(out, clustering_key, { bytes_view() });
     uint64_t timestamp = marker.timestamp();
     uint32_t value_length = 0;
 
@@ -1778,8 +1784,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
         write_range_tombstone(out, clustering_key, composite::eoc::start, clustering_key, composite::eoc::end, { column_name }, mview.tomb);
     }
     for (auto& cp: mview.cells) {
-        maybe_flush_pi_block(out, clustering_key, { column_name, cp.first });
-        write_column_name(out, *_schema, clustering_key, { column_name, cp.first });
+        index_and_write_column_name(out, clustering_key, { column_name, cp.first });
         write_cell(out, cp.second, cdef);
     }
 }
@@ -1809,8 +1814,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         assert(column_definition.is_regular());
         atomic_cell_view cell = c.as_atomic_cell();
         std::vector<bytes_view> column_name = { column_definition.name() };
-        maybe_flush_pi_block(out, clustering_key, column_name);
-        write_column_name(out, schema, clustering_key, column_name);
+        index_and_write_column_name(out, clustering_key, column_name);
         write_cell(out, cell, column_definition);
     });
 }
@@ -1827,11 +1831,23 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         assert(column_definition.is_static());
         const auto& column_name = column_definition.name();
         auto sp = composite::static_prefix(schema);
-        maybe_flush_pi_block(out, sp, { bytes_view(column_name) });
-        write_column_name(out, schema, sp, { bytes_view(column_name) });
+        index_and_write_column_name(out, sp, { bytes_view(column_name) });
         atomic_cell_view cell = c.as_atomic_cell();
         write_cell(out, cell, column_definition);
     });
+}
+
+void sstable::index_and_write_column_name(file_writer& out,
+         const composite& clustering,
+         const std::vector<bytes_view>& column_names,
+         composite::eoc marker) {
+    if (_schema->clustering_key_size()) {
+        auto colname = write_column_name(write_to_buffer_tag(), *_schema, clustering, column_names, marker);
+        maybe_flush_pi_block(out, clustering, colname);
+        write(out, static_cast<uint16_t>(colname.size()), colname);
+    } else {
+        write_column_name(out, *_schema, clustering, column_names, marker);
+    }
 }
 
 static void write_index_header(file_writer& out, disk_string_view<uint16_t>& key, uint64_t pos) {
