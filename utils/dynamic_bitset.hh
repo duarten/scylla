@@ -29,9 +29,12 @@
 namespace utils {
 
 class dynamic_bitset {
+public:
     using int_type = uint64_t;
     static constexpr size_t bits_per_int = std::numeric_limits<int_type>::digits;
-    static constexpr int_type all_set = std::numeric_limits<int_type>::max();
+    enum : int_type {
+        all_set = std::numeric_limits<int_type>::max()
+    };
 private:
     std::vector<int_type> _bits;
     size_t _bits_count = 0;
@@ -59,6 +62,11 @@ public:
         npos = std::numeric_limits<size_t>::max()
     };
 public:
+    dynamic_bitset() = default;
+    dynamic_bitset(std::vector<int_type> bits, size_t bits_count)
+            : _bits(std::move(bits))
+            , _bits_count(bits_count) {
+    }
     bool test(size_t n) const {
         auto idx = n / bits_per_int;
         return _bits[idx] & (int_type(1u) << (n % bits_per_int));
@@ -70,6 +78,10 @@ public:
     void clear(size_t n) {
         auto idx = n / bits_per_int;
         _bits[idx] &= ~(int_type(1u) << (n % bits_per_int));
+    }
+
+    const std::vector<int_type>& bits() const {
+        return _bits;
     }
 
     size_t size() const { return _bits_count; }
