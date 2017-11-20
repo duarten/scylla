@@ -1556,6 +1556,9 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         const composite& clustering_key,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
+    if (!_schema->clustering_key_size()) {
+        return;
+    }
     bytes colname = write_column_name(write_to_buffer_tag(), *_schema, clustering_key, column_names, marker);
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
@@ -1581,17 +1584,15 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         // block includes them), but we set block_next_start_offset after - so
         // even if we wrote a lot of open tombstones, we still get a full
         // block size of new data.
-        if (!clustering_key.empty()) {
-            auto& rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
-                    clustering_key_prefix::from_range(clustering_key.values()));
-            for (const auto& rt : rts) {
-                auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
-                auto end = composite::from_clustering_element(*_pi_write.schemap, rt.end);
-                write_range_tombstone(out,
-                        start, bound_kind_to_start_marker(rt.start_kind),
-                        end, bound_kind_to_end_marker(rt.end_kind),
-                        {}, rt.tomb);
-            }
+        auto& rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
+                clustering_key_prefix::from_range(clustering_key.values()));
+        for (const auto& rt : rts) {
+            auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
+            auto end = composite::from_clustering_element(*_pi_write.schemap, rt.end);
+            write_range_tombstone(out,
+                    start, bound_kind_to_start_marker(rt.start_kind),
+                    end, bound_kind_to_end_marker(rt.end_kind),
+                    {}, rt.tomb);
         }
         _pi_write.block_next_start_offset = out.offset() + _pi_write.desired_block_size;
         _pi_write.block_first_colname = colname;
