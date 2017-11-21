@@ -30,7 +30,9 @@
 #include "utils/estimated_histogram.hh"
 #include "column_name_helper.hh"
 #include "sstables/key.hh"
+#include "utils/dynamic_bitset.hh"
 #include "db/commitlog/replay_position.hh"
+#include <boost/integer.hpp>
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -362,6 +364,19 @@ struct sharding_metadata {
     auto describe_type(Describer f) { return f(token_ranges); }
 };
 
+// Scylla-specific list of features an sstable supports.
+enum sstable_feature : uint8_t {
+    End = 0
+};
+
+// Scylla-specific features enabled for a particular sstable.
+struct sstable_enabled_features {
+    static_assert(std::is_same<utils::dynamic_bitset::int_type, uint64_t>::value, "sstables require uint64_t bitset chunk size");
+    using size_type = boost::int_max_value_t<(std::numeric_limits<std::underlying_type_t<sstable_feature>>::max() + 1) / utils::dynamic_bitset::bits_per_int>::least;
+    utils::dynamic_bitset enabled_features;
+};
+
+sstable_enabled_features all_features();
 
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
 // that of an uint32_t is a bit wasteful, but it simplifies the code a lot
@@ -373,15 +388,21 @@ enum class metadata_type : uint32_t {
     Stats = 2,
 };
 
-
 enum class scylla_metadata_type : uint32_t {
     Sharding = 1,
+    Features = 2,
 };
 
 struct scylla_metadata {
     disk_set_of_tagged_union<scylla_metadata_type,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>
             > data;
+
+    bool has_feature(sstable_feature f) const {
+        auto features = data.get<scylla_metadata_type::Features, sstable_enabled_features>();
+        return features && features->enabled_features.test(size_t(f));
+    }
 
     template <typename Describer>
     auto describe_type(Describer f) { return f(data); }

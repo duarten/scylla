@@ -53,7 +53,7 @@
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <regex>
-#include <core/align.hh>
+#include <seastar/core/align.hh>
 #include "utils/phased_barrier.hh"
 #include "range_tombstone_list.hh"
 #include "counters.hh"
@@ -928,6 +928,29 @@ void write(file_writer& out, const compression& c) {
         out.write(p, bytes).get();
         idx += now;
     }
+}
+
+void write(file_writer& out, const sstable_enabled_features& f) {
+    write(out, static_cast<sstable_enabled_features::size_type>(f.enabled_features.size()));
+    for (auto&& v : f.enabled_features.bits()) {
+        write(out, v);
+    }
+}
+
+future<> parse(random_access_reader& in, sstable_enabled_features& d) {
+    return in.read_exactly(sizeof(sstable_enabled_features::size_type)).then([&] (auto buf) {
+        check_buf_size(buf, sizeof(sstable_enabled_features::size_type));
+        auto size = *reinterpret_cast<const sstable_enabled_features::size_type*>(buf.get());
+        auto num_chunks = align_up(size_t(size), utils::dynamic_bitset::bits_per_int) / utils::dynamic_bitset::bits_per_int;
+        auto features = make_lw_shared<std::vector<utils::dynamic_bitset::int_type>>();
+        auto eoarr = [features, num_chunks] { return features->size() == num_chunks; };
+        return do_until(std::move(eoarr), [features, &in] {
+            features->emplace_back();
+            return parse(in, features->back());
+        }).then([features, size, &d] {
+            d = sstable_enabled_features{utils::dynamic_bitset(std::move(*features), size)};
+        });
+    });
 }
 
 // This is small enough, and well-defined. Easier to just read it all
@@ -2163,6 +2186,15 @@ sstable::read_scylla_metadata(const io_priority_class& pc) {
     });
 }
 
+sstable_enabled_features all_features() {
+    static sstable_enabled_features enabled_features = [] {
+        utils::dynamic_bitset res;
+        res.resize(sstable_feature::End, true);
+        return sstable_enabled_features{std::move(res)};
+    }();
+    return enabled_features;
+}
+
 void
 sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard) {
     auto&& first_key = get_first_decorated_key();
@@ -2170,6 +2202,7 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard) {
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
     _components->scylla_metadata.emplace();
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    _components->scylla_metadata->data.set<scylla_metadata_type::Features>(all_features());
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
