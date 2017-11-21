@@ -223,3 +223,17 @@ BOOST_AUTO_TEST_CASE(test_resize_grow) {
     BOOST_REQUIRE_EQUAL(bits.find_next_clear(3), utils::dynamic_bitset::npos);
     BOOST_REQUIRE_EQUAL(bits.find_last_set(), 123);
 }
+
+BOOST_AUTO_TEST_CASE(test_resize_sets_bits_within_range) {
+        utils::dynamic_bitset bits;
+
+        bits.resize(120, true);
+        auto& raw = bits.bits();
+        BOOST_REQUIRE_EQUAL(raw.front(), utils::dynamic_bitset::all_set);
+        BOOST_REQUIRE_EQUAL(raw.back(), 0xFFFFFFFFFFFFFF);
+        BOOST_REQUIRE_EQUAL(bits.find_last_set(), 119);
+
+        bits.resize(124, true);
+        BOOST_REQUIRE_EQUAL(raw.back(), 0xFFFFFFFFFFFFFFF);
+        BOOST_REQUIRE_EQUAL(bits.find_last_set(), 123);
+}

@@ -151,16 +151,13 @@ size_t dynamic_bitset::find_previous_clear(size_t n) const
 
 void dynamic_bitset::resize(size_t n, bool set)
 {
-    if (_bits_count && _bits_count < n) {
+    if (_bits_count && _bits_count < n && set) {
         auto d = align_up(_bits_count, bits_per_int) - _bits_count;
-        if (set) {
-            _bits.back() |= mask_higher_bits(d);
-        } else {
-            _bits.back() &= ~mask_higher_bits(d);
-        }
+        _bits.back() |= mask_higher_bits(d);
     }
     _bits.resize(align_up(n, bits_per_int) / bits_per_int, set ? all_set : 0);
     _bits_count = n;
+    _bits.back() &= ~mask_higher_bits(align_up(_bits_count, bits_per_int) - _bits_count);
 }
 
 }
