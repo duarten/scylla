@@ -2200,6 +2200,7 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard) {
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
     _components->scylla_metadata.emplace();
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    _components->scylla_metadata->data.set<scylla_metadata_type::Features>(all_features());
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
