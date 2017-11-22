@@ -1642,8 +1642,6 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
 SEASTAR_TEST_CASE(test_counter_write) {
     return test_setup::do_with_test_directory([] {
         return seastar::async([] {
-            storage_service_for_tests ssft;
-
             auto s = schema_builder(some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
@@ -3324,6 +3322,7 @@ static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> explode
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         {
             auto s = schema_builder("ks", "cf")
                 .with_column("pk", utf8_type, column_kind::partition_key)
@@ -3419,6 +3418,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
 
 SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = schema_builder("ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -3588,6 +3588,7 @@ shared_sstable make_sstable(sstring path, streamed_mutation sm, sstable_writer_c
 
 SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         simple_schema table;
 
         std::vector<mutation_fragment> fragments;
