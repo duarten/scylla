@@ -3757,7 +3757,7 @@ void storage_proxy::init_messaging_service() {
                 case query::digest_algorithm::none:
                     qrr = query::result_request::only_result;
                     break;
-                case query::digest_algorithm::MD5:
+                default:
                     qrr = query::result_request::result_and_digest;
                     break;
                 }
