@@ -2401,6 +2401,10 @@ public:
     }
 };
 
+query::digest_algorithm digest_algorithm() {
+    return query::digest_algorithm::MD5;
+}
+
 class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
 protected:
     using targets_iterator = std::vector<gms::inet_address>::iterator;
@@ -2449,7 +2453,7 @@ protected:
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         auto opts = want_digest
-                  ? query::result_options{query::result_request::result_and_digest, query::digest_algorithm::MD5}
+                  ? query::result_options{query::result_request::result_and_digest, digest_algorithm()}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
@@ -2846,7 +2850,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 
 future<query::result_digest, api::timestamp_type, cache_temperature>
 storage_proxy::query_result_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, uint64_t max_size) {
-    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(query::digest_algorithm::MD5), std::move(trace_state), max_size).then([] (foreign_ptr<lw_shared_ptr<query::result>> result, cache_temperature hit_rate) {
+    return query_result_local(std::move(s), std::move(cmd), pr, query::result_options::only_digest(digest_algorithm()), std::move(trace_state), max_size).then([] (foreign_ptr<lw_shared_ptr<query::result>> result, cache_temperature hit_rate) {
         return make_ready_future<query::result_digest, api::timestamp_type, cache_temperature>(*result->digest(), result->last_modified(), hit_rate);
     });
 }
