@@ -270,6 +270,7 @@ private:
     gms::feature _correct_counter_order_feature;
     gms::feature _schema_tables_v3;
     gms::feature _correct_non_compound_range_tombstones;
+    gms::feature _xxhash_feature;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -281,6 +282,7 @@ public:
         _correct_counter_order_feature.enable();
         _schema_tables_v3.enable();
         _correct_non_compound_range_tombstones.enable();
+        _xxhash_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2248,6 +2250,10 @@ public:
 
     bool cluster_supports_reading_correctly_serialized_range_tombstones() const {
         return bool(_correct_non_compound_range_tombstones);
+    }
+
+    bool cluster_supports_xxhash_digest_algorithm() const {
+        return bool(_xxhash_feature);
     }
 };
 
