@@ -606,7 +606,7 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
 }
 
 // returns the timestamp of a latest update to the row
-static api::timestamp_type hash_row_slice(md5_hasher& hasher,
+static api::timestamp_type hash_row_slice(query::digester& hasher,
     const schema& s,
     column_kind kind,
     const row& cells,
