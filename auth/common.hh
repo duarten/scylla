@@ -24,11 +24,11 @@
 #include <chrono>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/resource.hh>
 #include <seastar/core/sstring.hh>
 
-#include "delayed_tasks.hh"
 #include "log.hh"
 #include "seastarx.hh"
 #include "utils/exponential_backoff_retry.hh"
@@ -65,24 +65,24 @@ future<> once_among_shards(Task&& f) {
     return make_ready_future<>();
 }
 
-template <class Task>
-static future<> do_execute_task(Task&& t, exponential_backoff_retry r) {
-    auto f = t();
-    return f.handle_exception([t = std::move(t), r = std::move(r)] (auto ep) mutable {
-        auth_log.warn("Task failed with error, rescheduling: {}", ep);
-        auto delay = r.retry();
-        return delay.then([t = std::move(t), r = std::move(r)] () mutable {
-            return do_execute_task(std::move(t), std::move(r));
-        });
-    });
+inline future<> delay_until_system_ready(seastar::abort_source& as) {
+    return sleep_abortable(10s, as);
 }
 
-// Task must support being invoked more than once.
-template <class Task, class Clock>
-void delay_until_system_ready(delayed_tasks<Clock>& ts, Task t) {
-    ts.schedule_after(10s, [t = std::move(t)] () mutable {
-        return do_execute_task(std::move(t), exponential_backoff_retry(1s, 1min));
-    });
+template<typename Func>
+future<> do_after_system_ready(seastar::abort_source& as, Func func) {
+    struct empty_state { };
+    return delay_until_system_ready(as).then([&as, func = std::move(func)] {
+        return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
+            return func().then_wrapped([] (auto&& f) -> stdx::optional<empty_state> {
+                if (f.failed()) {
+                    auth_log.warn("Auth task failed with error, rescheduling: {}", f.get_exception());
+                    return { };
+                }
+                return { empty_state() };
+            });
+        });
+    }).discard_result();
 }
 
 future<> create_metadata_table_if_missing(
