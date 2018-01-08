@@ -118,6 +118,9 @@ public:
 
     future<> stop();
 
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+    ///
     future<permission_set> get_permissions(stdx::string_view role_name, const resource&) const;
 
     ///
