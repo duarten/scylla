@@ -454,7 +454,7 @@ private:
                     auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), e->key().key());
                     auto snp = e->partition().read(region(), schema());
                     auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr),
-                            snp, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, _flushed_memory);
+                            snp, false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, _flushed_memory);
                     _flushed_memory.account_component(*e);
                     _flushed_memory.account_component(*snp);
                     _partition_reader = std::move(mpsr);
@@ -634,7 +634,8 @@ memtable_entry::read(lw_shared_ptr<memtable> mtbl,
         return flat_mutation_reader_from_mutations({std::move(m)}, fwd);
     }
     auto snp = _pe.read(mtbl->region(), _schema);
-    return make_partition_snapshot_flat_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl, fwd);
+    bool digest_requested = slice.options.contains<query::partition_slice::option::with_digest>();
+    return make_partition_snapshot_flat_reader(_schema, _key, std::move(cr), snp, digest_requested, *mtbl, mtbl->_read_section, mtbl, fwd);
 }
 
 void memtable::upgrade_entry(memtable_entry& e) {
