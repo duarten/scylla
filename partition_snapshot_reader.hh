@@ -105,6 +105,8 @@ private:
     }
 
     partition_snapshot::change_mark _change_mark;
+
+    bool _digest_requested;
 private:
     void refresh_iterators() {
         _clustering_rows.clear();
@@ -163,7 +165,7 @@ private:
 
     mutation_fragment_opt read_static_row() {
         _last_entry = position_in_partition(position_in_partition::static_row_tag_t());
-        auto sr = _snapshot->static_row();
+        auto sr = _snapshot->static_row(_digest_requested);
         if (!sr.empty()) {
             return mutation_fragment(std::move(sr));
         }
@@ -180,9 +182,16 @@ private:
             if (e.dummy()) {
                 continue;
             }
+            if (_digest_requested) {
+                e.row().cells().prepare_hash(*_schema, column_kind::regular_column);
+            }
             clustering_row result = e;
             while (has_more_rows() && _eq(peek_row().position(), result.position())) {
-                result.apply(*_schema, pop_clustering_row());
+                const rows_entry& e = pop_clustering_row();
+                if (_digest_requested) {
+                    e.row().cells().prepare_hash(*_schema, column_kind::regular_column);
+                }
+                result.apply(*_schema, e);
             }
             _last_entry = position_in_partition(result.position());
             return mutation_fragment(std::move(result));
@@ -234,7 +243,7 @@ private:
 public:
     template <typename... Args>
     partition_snapshot_flat_reader(schema_ptr s, dht::decorated_key dk, lw_shared_ptr<partition_snapshot> snp,
-                              query::clustering_key_filter_ranges crr,
+                              query::clustering_key_filter_ranges crr, bool digest_requested,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               boost::any pointer_to_container, Args&&... args)
         : impl(std::move(s))
@@ -249,7 +258,8 @@ public:
         , _snapshot(snp)
         , _range_tombstones(*_schema)
         , _lsa_region(region)
-        , _read_section(read_section) {
+        , _read_section(read_section)
+        , _digest_requested(digest_requested) {
         push_mutation_fragment(partition_start(std::move(dk), tomb(*snp)));
         do_fill_buffer(db::no_timeout);
     }
@@ -286,6 +296,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
                                     lw_shared_ptr<partition_snapshot> snp,
+                                    bool digest_requested,
                                     logalloc::region& region,
                                     logalloc::allocating_section& read_section,
                                     boost::any pointer_to_container,
@@ -293,7 +304,7 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     Args&&... args)
 {
     auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(std::move(s), std::move(dk),
-            snp, std::move(crr), region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
+            snp, std::move(crr), digest_requested, region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
         return make_forwardable(std::move(res)); // FIXME: optimize
     } else {
@@ -306,11 +317,12 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
                                     lw_shared_ptr<partition_snapshot> snp,
+                                    bool digest_requested,
                                     logalloc::region& region,
                                     logalloc::allocating_section& read_section,
                                     boost::any pointer_to_container,
                                     streamed_mutation::forwarding fwd)
 {
     return make_partition_snapshot_flat_reader<partition_snapshot_reader_dummy_accounter>(std::move(s),
-            std::move(dk), std::move(crr), std::move(snp), region, read_section, std::move(pointer_to_container), fwd);
+            std::move(dk), std::move(crr), std::move(snp), digest_requested, region, read_section, std::move(pointer_to_container), fwd);
 }
