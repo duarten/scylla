@@ -640,6 +640,40 @@ static api::timestamp_type hash_row_slice(query::digester& hasher,
     return max;
 }
 
+std::optional<cell_hash_type> row::cell_hash(column_id id) const {
+    if (_type == storage_type::vector) {
+        return id < max_vector_size && _storage.vector.hash_present.test(id) ? std::optional(_storage.vector.v[id].hash) : std::nullopt;
+    }
+    auto it = _storage.set.find(id, cell_entry::compare());
+    if (it != _storage.set.end()) {
+        return it->hash();
+    }
+    return std::nullopt;
+}
+
+void row::prepare_hash(const schema& s, column_kind kind) const {
+    // const to avoid removing const qualifiers on the read path
+    if (_type == storage_type::vector) {
+        for_each_cell([&](column_id id, const atomic_cell_or_collection& c) {
+            if (!_storage.vector.hash_present.test(id)) {
+                query::default_hasher cellh;
+                feed_hash(cellh, c, s.column_at(kind, id));
+                _storage.vector.v[id].hash = cellh.finalize_uint64();
+                _storage.vector.hash_present.set(id);
+            }
+        });
+    } else {
+        for_each_cell([&](column_id id, const atomic_cell_or_collection& c) {
+            auto it = _storage.set.find(id, cell_entry::compare());
+            if (!it->hash()) {
+                query::default_hasher cellh;
+                feed_hash(cellh, c, s.column_at(kind, id));
+                it->_hash = cellh.finalize_uint64();
+            }
+        });
+    }
+}
+
 template<typename RowWriter>
 static void get_compacted_row_slice(const schema& s,
     const query::partition_slice& slice,
@@ -955,8 +989,10 @@ mutation_partition mutation_partition::sliced(const schema& s, const query::clus
     return p;
 }
 
-void
-apply_monotonically(const column_definition& def, atomic_cell_or_collection& dst,  atomic_cell_or_collection& src) {
+static
+std::optional<cell_hash_type>
+apply_monotonically(const column_definition& def, atomic_cell_or_collection& dst, std::optional<cell_hash_type> dst_hash,
+                    atomic_cell_or_collection& src, std::optional<cell_hash_type> src_hash) {
     // Must be run via with_linearized_managed_bytes() context, but assume it is
     // provided via an upper layer
     if (def.is_atomic()) {
@@ -964,22 +1000,26 @@ apply_monotonically(const column_definition& def, atomic_cell_or_collection& dst
             counter_cell_view::apply_reversibly(dst, src); // FIXME: Optimize
         } else if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
             std::swap(dst, src);
+            return std::move(src_hash);
+        } else {
+            return std::move(dst_hash);
         }
     } else {
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
         dst = ct->merge(dst.as_collection_mutation(), src.as_collection_mutation());
     }
+    return std::nullopt;
 }
 
 void
-row::apply(const column_definition& column, const atomic_cell_or_collection& value) {
+row::apply(const column_definition& column, const atomic_cell_or_collection& value, std::optional<cell_hash_type> hash) {
     auto tmp = value;
-    apply_monotonically(column, std::move(tmp));
+    apply_monotonically(column, std::move(tmp), std::move(hash));
 }
 
 void
-row::apply(const column_definition& column, atomic_cell_or_collection&& value) {
-    apply_monotonically(column, std::move(value));
+row::apply(const column_definition& column, atomic_cell_or_collection&& value, std::optional<cell_hash_type> hash) {
+    apply_monotonically(column, std::move(value), std::move(hash));
 }
 
 template<typename Func>
@@ -988,8 +1028,10 @@ void row::consume_with(Func&& func) {
         unsigned i = 0;
         for (; i < _storage.vector.v.size(); i++) {
             if (_storage.vector.present.test(i)) {
-                func(i, _storage.vector.v[i]);
+                auto& [cell, maybe_hash] = _storage.vector.v[i];
+                func(i, cell, _storage.vector.wrap_hash(i, maybe_hash));
                 _storage.vector.present.reset(i);
+                _storage.vector.hash_present.reset(i);
                 --_size;
             }
         }
@@ -997,7 +1039,7 @@ void row::consume_with(Func&& func) {
         auto del = current_deleter<cell_entry>();
         auto i = _storage.set.begin();
         while (i != _storage.set.end()) {
-            func(i->id(), i->cell());
+            func(i->id(), i->cell(), i->hash());
             i = _storage.set.erase_and_dispose(i, del);
             --_size;
         }
@@ -1005,7 +1047,7 @@ void row::consume_with(Func&& func) {
 }
 
 void
-row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value) {
+row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value, std::optional<uint64_t> hash) {
     static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
                   && std::is_nothrow_move_assignable<atomic_cell_or_collection>::value,
                   "noexcept required for atomicity");
@@ -1013,17 +1055,30 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
     // our mutations are not yet immutable
     auto id = column.id;
     if (_type == storage_type::vector && id < max_vector_size) {
+        auto maybe_add_hash = [&] (cell_hash_type& dst_hash) {
+            if (hash) {
+                dst_hash = *hash;
+                _storage.vector.hash_present.set(id);
+                return true;
+            }
+            return false;
+        };
         if (id >= _storage.vector.v.size()) {
             _storage.vector.v.resize(id);
-            _storage.vector.v.emplace_back(std::move(value));
+            auto& c_a_h = _storage.vector.v.emplace_back(cell_and_hash{std::move(value), 0});
             _storage.vector.present.set(id);
             _size++;
-        } else if (!bool(_storage.vector.v[id])) {
-            _storage.vector.v[id] = std::move(value);
+            maybe_add_hash(c_a_h.hash);
+        } else if (auto& [cell, cached_hash] = _storage.vector.v[id]; !bool(cell)) {
+            cell = std::move(value);
             _storage.vector.present.set(id);
             _size++;
+            maybe_add_hash(cached_hash);
         } else {
-            ::apply_monotonically(column, _storage.vector.v[id], value);
+            hash = ::apply_monotonically(column, cell, _storage.vector.wrap_hash(id, cached_hash), value, std::move(hash));
+            if (!maybe_add_hash(cached_hash)) {
+                _storage.vector.hash_present.reset(id);
+            }
         }
     } else {
         if (_type == storage_type::vector) {
@@ -1035,8 +1090,9 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
             _storage.set.insert(i, *e);
             _size++;
             e->_cell = std::move(value);
+            e->_hash = std::move(hash);
         } else {
-            ::apply_monotonically(column, i->cell(), value);
+            i->_hash = ::apply_monotonically(column, i->cell(), std::move(i->_hash), value, std::move(hash));
         }
     }
 }
@@ -1045,7 +1101,7 @@ void
 row::append_cell(column_id id, atomic_cell_or_collection value) {
     if (_type == storage_type::vector && id < max_vector_size) {
         _storage.vector.v.resize(id);
-        _storage.vector.v.emplace_back(std::move(value));
+        _storage.vector.v.emplace_back(cell_and_hash{std::move(value), 0});
         _storage.vector.present.set(id);
     } else {
         if (_type == storage_type::vector) {
@@ -1063,7 +1119,7 @@ row::find_cell(column_id id) const {
         if (id >= _storage.vector.v.size() || !_storage.vector.present.test(id)) {
             return nullptr;
         }
-        return &_storage.vector.v[id];
+        return &_storage.vector.v[id].cell;
     } else {
         auto i = _storage.set.find(id, cell_entry::compare());
         if (i == _storage.set.end()) {
@@ -1077,8 +1133,8 @@ size_t row::external_memory_usage() const {
     size_t mem = 0;
     if (_type == storage_type::vector) {
         mem += _storage.vector.v.external_memory_usage();
-        for (auto&& ac_o_c : _storage.vector.v) {
-            mem += ac_o_c.external_memory_usage();
+        for (auto&& c_a_h : _storage.vector.v) {
+            mem += c_a_h.cell.external_memory_usage();
         }
     } else {
         for (auto&& ce : _storage.set) {
@@ -1322,12 +1378,14 @@ row::~row() {
 row::cell_entry::cell_entry(const cell_entry& o)
     : _id(o._id)
     , _cell(o._cell)
+    , _hash(std::move(o._hash))
 { }
 
 row::cell_entry::cell_entry(cell_entry&& o) noexcept
     : _link()
     , _id(o._id)
     , _cell(std::move(o._cell))
+    , _hash(std::move(o._hash))
 {
     using container_type = row::map_type;
     container_type::node_algorithms::replace_node(o._link.this_ptr(), _link.this_ptr());
@@ -1348,13 +1406,14 @@ void row::vector_to_set()
     map_type set;
     try {
     for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-        auto& c = _storage.vector.v[i];
-        auto e = current_allocator().construct<cell_entry>(i, std::move(c));
+        auto& [cell, maybe_hash] = _storage.vector.v[i];
+        auto e = current_allocator().construct<cell_entry>(i, std::move(cell));
+        e->_hash = _storage.vector.wrap_hash(i, maybe_hash);
         set.insert(set.end(), *e);
     }
     } catch (...) {
         set.clear_and_dispose([this, del = current_deleter<cell_entry>()] (cell_entry* ce) noexcept {
-            _storage.vector.v[ce->id()] = std::move(ce->cell());
+            _storage.vector.v[ce->id()] = { std::move(ce->cell()), ce->_hash.value_or(0) };
             del(ce);
         });
         throw;
@@ -1439,8 +1498,8 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
     } else {
         reserve(other._storage.set.rbegin()->id());
     }
-    other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-        apply(s.column_at(kind, id), cell);
+    other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell, std::optional<cell_hash_type> hash) {
+        apply(s.column_at(kind, id), cell, std::move(hash));
     });
 }
 
@@ -1457,8 +1516,8 @@ void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
     } else {
         reserve(other._storage.set.rbegin()->id());
     }
-    other.consume_with([&] (column_id id, atomic_cell_or_collection& cell) {
-        apply_monotonically(s.column_at(kind, id), std::move(cell));
+    other.consume_with([&] (column_id id, atomic_cell_or_collection& cell, std::optional<cell_hash_type> hash) {
+        apply_monotonically(s.column_at(kind, id), std::move(cell), std::move(hash));
     });
 }
 
