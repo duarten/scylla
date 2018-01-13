@@ -23,6 +23,8 @@
 
 #include <iosfwd>
 #include <map>
+#include <optional>
+#include <boost/container/small_vector.hpp>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/indexed.hpp>
@@ -58,10 +60,13 @@ class clustering_row;
 // Can be used as a range of row::cell_entry.
 //
 class row {
+    using hash_type = uint64_t;
+
     class cell_entry {
         boost::intrusive::set_member_hook<> _link;
         column_id _id;
         atomic_cell_or_collection _cell;
+        mutable std::optional<hash_type> _hash;
         friend class row;
     public:
         cell_entry(column_id id, atomic_cell_or_collection cell)
@@ -77,6 +82,7 @@ class row {
         column_id id() const { return _id; }
         const atomic_cell_or_collection& cell() const { return _cell; }
         atomic_cell_or_collection& cell() { return _cell; }
+        std::optional<hash_type> hash() const { return _hash; }
 
         struct compare {
             bool operator()(const cell_entry& e1, const cell_entry& e2) const {
@@ -112,6 +118,8 @@ private:
     struct vector_storage {
         std::bitset<max_vector_size> present;
         vector_type v;
+        mutable std::bitset<max_vector_size> hash_present;
+        mutable std::vector<hash_type> hashes;
 
         vector_storage() = default;
         vector_storage(const vector_storage&) = default;
@@ -119,6 +127,23 @@ private:
                 : present(other.present)
                 , v(std::move(other.v)) {
             other.present = {};
+        }
+
+        std::optional<hash_type> hash(column_id id) const {
+            if (hash_present.test(id)) {
+                return std::optional(hashes[id]);
+            }
+            return std::nullopt;
+        }
+
+        void add_hash(column_id id, hash_type hash) const {
+            if (id >= hashes.size()) {
+                hashes.resize(id);
+                hashes.emplace_back(hash);
+            } else {
+                hashes[id] = hash;
+            }
+            hash_present.set(id);
         }
     };
 
@@ -128,6 +153,7 @@ private:
         map_type set;
         vector_storage vector;
     } _storage;
+
 public:
     row();
     ~row();
@@ -137,7 +163,7 @@ public:
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
 
-    void reserve(column_id);
+    void reserve(column_id, size_t cached_hashes = 0);
 
     const atomic_cell_or_collection& cell_at(column_id id) const;
 
@@ -155,6 +181,7 @@ private:
                 if (func(i, c)) {
                     c = atomic_cell_or_collection();
                     _storage.vector.present.reset(i);
+                    _storage.vector.hash_present.reset(i);
                     _size--;
                 }
             }
@@ -195,43 +222,66 @@ private:
 
     template<typename Func>
     void consume_with(Func&&);
+
+    template<typename Func, typename VectorStorage>
+    static constexpr auto maybe_invoke_with_hash(Func& func, VectorStorage& s, column_id id) {
+        if constexpr (std::is_invocable_v<Func, column_id, const atomic_cell_or_collection&, std::optional<hash_type>>) {
+            return func(id, s.v[id], s.hash(id));
+        } else {
+            return func(id, s.v[id]);
+        }
+    }
+
+    template<typename Func, typename CellEntry>
+    static constexpr auto maybe_invoke_with_hash(Func& func, CellEntry& cell) {
+        if constexpr (std::is_invocable_v<Func, column_id, const atomic_cell_or_collection&, std::optional<hash_type>>) {
+            return func(cell.id(), cell.cell(), cell.hash());
+        } else {
+            return func(cell.id(), cell.cell());
+        }
+    }
 public:
-    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
+    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row,
+    // or Func(column_id, atomic_cell_or_collection&, std::optional<hash_type>) depending
+    // on the concrete Func type.
     // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(Func&& func) {
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                func(i, _storage.vector.v[i]);
+                maybe_invoke_with_hash(func, _storage.vector, i);
             }
         } else {
             for (auto& cell : _storage.set) {
-                func(cell.id(), cell.cell());
+                maybe_invoke_with_hash(func, cell);
             }
         }
     }
 
     template<typename Func>
     void for_each_cell(Func&& func) const {
-        for_each_cell_until([func = std::forward<Func>(func)] (column_id id, const atomic_cell_or_collection& c) {
-            func(id, c);
-            return stop_iteration::no;
-        });
+        if (_type == storage_type::vector) {
+            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
+                maybe_invoke_with_hash(func, _storage.vector, i);
+            }
+        } else {
+            for (auto& cell : _storage.set) {
+                maybe_invoke_with_hash(func, cell);
+            }
+        }
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                auto& cell = _storage.vector.v[i];
-                if (func(i, cell) == stop_iteration::yes) {
+                if (maybe_invoke_with_hash(func, _storage.vector, i) == stop_iteration::yes) {
                     break;
                 }
             }
         } else {
             for (auto& cell : _storage.set) {
-                const auto& c = cell.cell();
-                if (func(cell.id(), c) == stop_iteration::yes) {
+                if (maybe_invoke_with_hash(func, cell) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -240,15 +290,16 @@ public:
 
     // Merges cell's value into the row.
     // Weak exception guarantees.
-    void apply(const column_definition& column, const atomic_cell_or_collection& cell);
+    void apply(const column_definition& column, const atomic_cell_or_collection& cell, std::optional<hash_type> hash = std::nullopt);
 
     // Merges cell's value into the row.
     // Weak exception guarantees.
-    void apply(const column_definition& column, atomic_cell_or_collection&& cell);
+    void apply(const column_definition& column, atomic_cell_or_collection&& cell, std::optional<hash_type> hash = std::nullopt);
 
     // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
-    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell);
+    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell, std::optional<hash_type> hash);
 
+    std::optional<hash_type> apply_monotonically(const column_definition& def, atomic_cell_or_collection& dst, atomic_cell_or_collection& src, std::optional<hash_type> hash);
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
@@ -271,6 +322,10 @@ public:
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     size_t external_memory_usage() const;
+
+    std::optional<hash_type> cell_hash(column_id id) const;
+
+    void prepare_hash(const schema& s, column_kind kind) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
