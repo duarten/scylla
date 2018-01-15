@@ -639,7 +639,17 @@ struct appending_hash<row> {
             }
         };
         for (auto id : columns) {
-            do_cell_hash(h, id);
+            if constexpr (std::is_same_v<Hasher, xx_hasher>) {
+                if (auto hash_opt = cells.cell_hash(id)) {
+                    feed_hash(h, *hash_opt);
+                } else {
+                    xx_hasher cellh;
+                    do_cell_hash(cellh, id);
+                    feed_hash(h, cellh.finalize_uint64());
+                }
+            } else {
+                do_cell_hash(h, id);
+            }
         }
     }
 };
