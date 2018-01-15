@@ -642,7 +642,17 @@ struct appending_hash<row> {
             }
         };
         for (auto id : columns) {
-            do_cell_hash(h, id);
+            if constexpr (query::using_hash_of_hash_v<Hasher>) {
+                if (auto hash_opt = cells.cell_hash(id)) {
+                    feed_hash(h, *hash_opt);
+                } else {
+                    query::default_hasher cellh;
+                    do_cell_hash(cellh, id);
+                    feed_hash(h, cellh.finalize_uint64());
+                }
+            } else {
+                do_cell_hash(h, id);
+            }
         }
     }
 };
