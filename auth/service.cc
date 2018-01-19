@@ -353,6 +353,14 @@ future<bool> service::exists(const resource& r) const {
 // Free functions.
 //
 
+static future<> validate_role_exists(const service& ser, stdx::string_view role_name) {
+    return ser.underlying_role_manager().exists(role_name).then([role_name](bool exists) {
+        if (!exists) {
+            throw nonexistant_role(role_name);
+        }
+    });
+}
+
 future<bool> has_superuser(const service& ser, const authenticated_user& u) {
     if (is_anonymous(u)) {
         return make_ready_future<bool>(false);
@@ -453,11 +461,7 @@ future<> drop_role(service& ser, stdx::string_view name) {
 future<bool> has_role(const service& ser, stdx::string_view grantee, stdx::string_view name) {
     return when_all_succeed(
             ser.get_roles(grantee),
-            ser.underlying_role_manager().exists(name)).then([name](std::unordered_set<sstring> all_roles, bool exists) {
-        if (!exists) {
-            return make_exception_future<bool>(nonexistant_role(name));
-        }
-
+            validate_role_exists(ser, name)).then([name](std::unordered_set<sstring> all_roles) {
         return make_ready_future<bool>(all_roles.count(sstring(name)) != 0);
     });
 }
@@ -467,6 +471,26 @@ future<bool> has_role(const service& ser, const authenticated_user& u, stdx::str
     }
 
     return has_role(ser, *u.name, name);
+}
+
+future<> grant_permissions(
+        service& ser,
+        stdx::string_view role_name,
+        permission_set perms,
+        const resource& r) {
+    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
+        return ser.underlying_authorizer().grant(role_name, perms, r);
+    });
+}
+
+future<> revoke_permissions(
+        service& ser,
+        stdx::string_view role_name,
+        permission_set perms,
+        const resource& r) {
+    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
+        return ser.underlying_authorizer().revoke(role_name, perms, r);
+    });
 }
 
 future<std::vector<permission_details>> list_filtered_permissions(
