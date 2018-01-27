@@ -105,6 +105,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
             if (status.value_or(db::config::value_status::Invalid) != db::config::value_status::Invalid) {
                 level = log_level::error;
             }
+            level = log_level::debug;
             startlog.log(level, "{} : {}", msg, opt);
         });
     }).handle_exception([file](auto ep) {
@@ -355,7 +356,9 @@ int main(int ac, char** av) {
                 c.initialize(opts).get();
             }
 
-            logging::apply_settings(cfg->logging_settings(opts));
+            auto ls = cfg->logging_settings(opts);
+            ls.default_level = log_level::debug;
+            logging::apply_settings(ls);
 
             verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
