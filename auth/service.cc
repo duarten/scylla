@@ -257,8 +257,8 @@ future<bool> service::has_existing_legacy_users() const {
     });
 }
 
-future<permission_set> service::get_permissions(stdx::string_view role_name, resource r) const {
-    return _permissions_cache->get(role_name, std::move(r));
+future<permission_set> service::get_permissions(stdx::string_view role_name, const resource& r) const {
+    return _permissions_cache->get(role_name, r);
 }
 
 future<bool> service::has_superuser(stdx::string_view role_name) const {

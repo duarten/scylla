@@ -118,7 +118,7 @@ public:
 
     future<> stop();
 
-    future<permission_set> get_permissions(stdx::string_view role_name, resource) const;
+    future<permission_set> get_permissions(stdx::string_view role_name, const resource&) const;
 
     ///
     /// Query whether the named role has been granted a role that is a superuser.
