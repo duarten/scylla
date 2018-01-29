@@ -160,17 +160,4 @@ public:
     virtual future<bool> can_login(stdx::string_view role_name) const = 0;
 };
 
-///
-/// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
-///
-inline future<> validate_exists(const role_manager& rm, stdx::string_view role_name) {
-    return rm.exists(role_name).then([role_name](bool exists) {
-        if (!exists) {
-            throw nonexistant_role(role_name);
-        }
-
-        return make_ready_future();
-    });
-}
-
 }
