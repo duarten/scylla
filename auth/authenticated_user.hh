@@ -52,7 +52,11 @@
 
 namespace auth {
 
-struct authenticated_user final {
+///
+/// A type-safe wrapper for the name of a logged-in user, or a nameless (anonymous) user.
+///
+class authenticated_user final {
+public:
     ///
     /// An anonymous user has no name.
     ///
@@ -78,6 +82,9 @@ inline bool operator!=(const authenticated_user& u1, const authenticated_user& u
     return !(u1 == u2);
 }
 
+///
+/// Equal to `authenticated_user(anonymous_user_t{})`.
+///
 const authenticated_user& anonymous_user() noexcept;
 
 inline bool is_anonymous(const authenticated_user& u) noexcept {
