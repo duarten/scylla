@@ -269,7 +269,7 @@ future<permission_set> service::get_uncached_permissions(stdx::string_view role_
         //
 
         return do_with(permission_set(), [this, role_name, &r](auto& all_perms) {
-            return get_roles(role_name).then([this, &r, &all_perms](std::unordered_set<sstring> all_roles) {
+            return get_roles(role_name).then([this, &r, &all_perms](role_set all_roles) {
                 return do_with(std::move(all_roles), [this, &r, &all_perms](const auto& all_roles) {
                     return parallel_for_each(all_roles, [this, &r, &all_perms](stdx::string_view role_name) {
                         return _authorizer->authorize(role_name, r).then([&all_perms](permission_set perms) {
@@ -306,7 +306,7 @@ future<bool> service::has_superuser(stdx::string_view role_name) const {
     });
 }
 
-future<std::unordered_set<sstring>> service::get_roles(stdx::string_view role_name) const {
+future<role_set> service::get_roles(stdx::string_view role_name) const {
     //
     // We may wish to cache this information in the future (as Apache Cassandra does).
     //
@@ -369,9 +369,9 @@ future<bool> has_superuser(const service& ser, const authenticated_user& u) {
     return ser.has_superuser(*u.name);
 }
 
-future<std::unordered_set<sstring>> get_roles(const service& ser, const authenticated_user& u) {
+future<role_set> get_roles(const service& ser, const authenticated_user& u) {
     if (is_anonymous(u)) {
-        return make_ready_future<std::unordered_set<sstring>>();
+        return make_ready_future<role_set>();
     }
 
     return ser.get_roles(*u.name);
@@ -470,7 +470,7 @@ future<> drop_role(service& ser, stdx::string_view name) {
 future<bool> has_role(const service& ser, stdx::string_view grantee, stdx::string_view name) {
     return when_all_succeed(
             ser.get_roles(grantee),
-            validate_role_exists(ser, name)).then([name](std::unordered_set<sstring> all_roles) {
+            validate_role_exists(ser, name)).then([name](role_set all_roles) {
         return make_ready_future<bool>(all_roles.count(sstring(name)) != 0);
     });
 }
@@ -552,7 +552,7 @@ future<std::vector<permission_details>> list_filtered_permissions(
         //
 
         return do_with(std::move(all_details), [&ser, &role_name](auto& all_details) {
-            return ser.get_roles(*role_name).then([&all_details](std::unordered_set<sstring> all_roles) {
+            return ser.get_roles(*role_name).then([&all_details](role_set all_roles) {
                 all_details.erase(
                         std::remove_if(
                                 all_details.begin(),
