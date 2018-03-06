@@ -2129,6 +2129,38 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/view_build_status",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Gets the progress of a materialized view build",
+               "type":"mapper",
+               "nickname":"view_build_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"view",
+                     "description":"View name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
       }
    ],
    "models":{
