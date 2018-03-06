@@ -40,6 +40,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "utils/runtime.hh"
 #include "utils/file_lock.hh"
 #include "log.hh"
@@ -459,8 +460,9 @@ int main(int ac, char** av) {
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             supervisor::notify("initializing storage service");
-            init_storage_service(db, auth_service);
+            init_storage_service(db, auth_service, sys_dist_ks);
             supervisor::notify("starting per-shard database core");
+
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
             auto make_sched_group = [&] (sstring name, unsigned shares) {

@@ -104,11 +104,12 @@ int get_generation_number() {
     return generation_number;
 }
 
-storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service)
+storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks)
         : _db(db)
         , _auth_service(auth_service)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
-        , _update_pending_ranges_action([this] { return do_update_pending_ranges(); }) {
+        , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
+        , _sys_dist_ks(sys_dist_ks) {
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
@@ -3416,6 +3417,19 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
 std::vector<gms::inet_address>
 storage_service::get_natural_endpoints(const sstring& keyspace, const token& pos) const {
     return _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(pos);
+}
+
+future<std::unordered_map<sstring, sstring>>
+storage_service::view_build_statuses(sstring keyspace, sstring view_name) const {
+    return _sys_dist_ks.local().view_status(std::move(keyspace), std::move(view_name)).then([this] (std::unordered_map<utils::UUID, sstring> status) {
+        auto& endpoint_to_host_id = get_token_metadata().get_endpoint_to_host_id_map_for_reading();
+        return boost::copy_range<std::unordered_map<sstring, sstring>>(endpoint_to_host_id
+                | boost::adaptors::transformed([&status] (const std::pair<inet_address, utils::UUID>& p) {
+                    auto it = status.find(p.second);
+                    auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
+                    return std::make_pair(p.first.to_sstring(), std::move(s));
+                }));
+    });
 }
 
 } // namespace service
