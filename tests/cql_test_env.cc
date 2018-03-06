@@ -47,6 +47,7 @@
 #include "service/storage_service.hh"
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 
 namespace sstables {
 
@@ -307,6 +308,7 @@ public:
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             auto auth_service = ::make_shared<sharded<auth::service>>();
+            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
 
             auto& ss = service::get_storage_service();
             ss.start(std::ref(*db), std::ref(*auth_service)).get();
@@ -366,6 +368,12 @@ public:
             auto deinit_storage_service_server = defer([auth_service] {
                 gms::stop_gossiping().get();
                 auth_service->stop().get();
+            });
+
+            sys_dist_ks.start(std::ref(qp), std::ref(mm)).get();
+            sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
+            auto stop_sys_dist_ks= defer([&] {
+                sys_dist_ks.stop().get();
             });
 
             // Create the testing user.

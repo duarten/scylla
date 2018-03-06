@@ -35,6 +35,7 @@
 #include "service/load_broadcaster.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
@@ -456,6 +457,7 @@ int main(int ac, char** av) {
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;
+            static sharded<db::system_distributed_keyspace> sys_dist_ks;
             supervisor::notify("initializing storage service");
             init_storage_service(db, auth_service);
             supervisor::notify("starting per-shard database core");
@@ -596,6 +598,8 @@ int main(int ac, char** av) {
             }).get();
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp).get();
+            sys_dist_ks.start(std::ref(qp), std::ref(mm)).get();
+            sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start).get();
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
