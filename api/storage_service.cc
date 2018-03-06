@@ -852,6 +852,14 @@ void set_storage_service(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
         });
     });
+
+    ss::view_build_status.set(r, [&ctx] (std::unique_ptr<request> req) {
+        auto keyspace = validate_keyspace(ctx, req->param);
+        auto view = req->param["view"];
+        return service::get_local_storage_service().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
+            return json_return_type(std::move(status));
+        });
+    });
 }
 
 }
