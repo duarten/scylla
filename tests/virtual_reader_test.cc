@@ -33,12 +33,14 @@
 #include "tests/test_services.hh"
 
 #include "db/size_estimates_virtual_reader.hh"
+#include "db/system_keyspace.hh"
 #include "core/future-util.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "dht/i_partitioner.hh"
 #include "transport/messages/result_message.hh"
 
-SEASTAR_TEST_CASE(test_query_virtual_table) {
+SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
     return do_with_cql_env([] (auto& e) {
         auto ranges = db::size_estimates::size_estimates_mutation_reader::get_local_ranges().get0();
         auto start_token1 = utf8_type->to_string(ranges[3].start);
@@ -213,5 +215,46 @@ SEASTAR_TEST_CASE(test_query_virtual_table) {
                 BOOST_REQUIRE_EQUAL(rs->size(), 259);
             });
         }).discard_result();
+    });
+}
+
+SEASTAR_TEST_CASE(test_query_view_built_progress_virtual_table) {
+    return do_with_cql_env_thread([] (auto& e) {
+        auto rand = [] { return dht::global_partitioner().get_random_token(); };
+        db::system_keyspace::register_view_for_building("ks", "v1", rand()).get();
+        db::system_keyspace::register_view_for_building("ks", "v2", rand()).get();
+        db::system_keyspace::register_view_for_building("ks", "v3", rand()).get();
+        db::system_keyspace::update_view_build_progress("ks", "v3", rand()).get();
+        db::system_keyspace::register_view_for_building("ks", "v4", rand()).get();
+        db::system_keyspace::update_view_build_progress("ks", "v4", rand()).get();
+        db::system_keyspace::register_view_for_building("ks", "v5", rand()).get();
+        db::system_keyspace::register_view_for_building("ks", "v6", rand()).get();
+        db::system_keyspace::remove_view_build_progress_across_all_shards("ks", "v5").get();
+        db::system_keyspace::remove_view_build_progress_across_all_shards("ks", "v6").get();
+        auto &qp = e.local_qp();
+        auto rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 4);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 4);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress limit 1").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 1);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name = 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 1);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name > 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 2);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name >= 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 3);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name  < 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 1);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name  <= 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 2);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name in ('v1', 'v2', 'v3')").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 3);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name >= 'v2' and view_name  <= 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 1);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name >= 'v2' and view_name  <= 'v3'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 2);
+        rs = qp.execute_internal("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name > 'v1' and view_name  < 'v2'").get0();
+        BOOST_REQUIRE_EQUAL(rs->size(), 0);
     });
 }
