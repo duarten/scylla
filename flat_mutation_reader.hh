@@ -51,8 +51,8 @@ GCC6_CONCEPT(
     template<typename T>
     concept bool FlattenedConsumer() {
         return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
-            obj.consume_new_partition(dk);
-            obj.consume_end_of_partition();
+            { obj.consume_new_partition(dk) } -> stop_iteration;
+            { obj.consume_end_of_partition(); } -> stop_iteration;
         };
     }
 
