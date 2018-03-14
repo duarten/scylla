@@ -1480,10 +1480,24 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
             }).finally([this, view_id = view->id()] {
                 return container().invoke_on_all([view_id] (view_builder& builder) {
                     builder._built_views.erase(view_id);
+                    if (engine().cpu_id() == 0) {
+                        auto view = builder._db.find_schema(view_id);
+                        auto it = builder._build_notifiers.find(std::pair(view->ks_name(), view->cf_name()));
+                        if (it != builder._build_notifiers.end()) {
+                            it->second.set_value();
+                        }
+                    }
                 });
             });
         }
         return system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), next_token);
+    });
+}
+
+future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& view_name, lowres_clock::time_point timeout) {
+    return container().invoke_on(0, [ks_name, view_name, timeout] (view_builder& builder) {
+        auto v = std::pair(std::move(ks_name), std::move(view_name));
+        return builder._build_notifiers[std::move(v)].get_shared_future(timeout);
     });
 }
 
