@@ -657,7 +657,7 @@ void gossiper::run() {
 
                 /* Gossip to some unreachable member with some probability to check if he is back up */
                 do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
-                    logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
+                    logger.trace("Fail to do_gossip_to_unreachable_member: {}", ep);
                 });
 
                 /* Gossip to a seed if we did not do so above, or we have seen less nodes
@@ -853,6 +853,7 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) {
 
 // Runs inside seastar::async context
 void gossiper::evict_from_membership(inet_address endpoint) {
+    auto permit = lock_endpoint(endpoint).get0();
     _unreachable_endpoints.erase(endpoint);
     container().invoke_on_all([endpoint] (auto& g) {
         g.endpoint_state_map.erase(endpoint);
