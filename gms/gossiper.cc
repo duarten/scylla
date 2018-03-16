@@ -207,7 +207,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.partioner(), get_partitioner_name());
     this->set_last_processed_message_at();
-    if (!this->is_enabled()) {
+    if (!this->is_enabled() && !this->is_in_shadow_round()) {
         return make_ready_future<>();
     }
 
