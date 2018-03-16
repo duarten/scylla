@@ -171,6 +171,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
 
 future<> standard_role_manager::create_default_role_if_missing() const {
     return default_role_row_satisfies(_qp, [](auto&&) { return true; }).then([this](bool exists) {
+        /*
         if (!exists) {
             static const sstring query = sprint(
                     "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
@@ -184,7 +185,7 @@ future<> standard_role_manager::create_default_role_if_missing() const {
                 log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
                 return make_ready_future<>();
             });
-        }
+        }*/
 
         return make_ready_future<>();
     }).handle_exception_type([](const exceptions::unavailable_exception& e) {
@@ -244,7 +245,7 @@ future<> standard_role_manager::start() {
                         return;
                     }
 
-                    create_default_role_if_missing().get0();
+                    //create_default_role_if_missing().get0();
                 });
             });
         });

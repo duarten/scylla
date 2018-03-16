@@ -235,7 +235,7 @@ future<> password_authenticator::start() {
                      return;
                  }
 
-                 create_default_if_missing().get0();
+                 //create_default_if_missing().get0();
              });
          });
 
