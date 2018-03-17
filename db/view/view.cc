@@ -128,13 +128,31 @@ bool clustering_prefix_matches(const schema& base, const view_info& view, const 
             base, key, ck, row(), cql3::query_options({ }), gc_clock::now());
 }
 
+static bool has_ttl(const column_definition& def, const atomic_cell_or_collection& cell) {
+    if (def.is_atomic()) {
+        return cell.as_atomic_cell().is_live_and_has_ttl();
+    }
+
+    auto&& col = cell.as_collection_mutation();
+    auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
+    auto m_view = ctype->deserialize_mutation_form(col);
+    for (auto&& [_, cell] : m_view.cells) {
+        if (cell.is_live_and_has_ttl()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update) {
     // We can guarantee that the view won't be affected if:
     //  - the primary key is excluded by the view filter (note that this isn't true of the filter on regular columns:
     //    even if an update don't match a view condition on a regular column, that update can still invalidate a
     //    pre-existing entry) - note that the upper layers should already have checked the partition key;
     //  - the update doesn't modify any of the columns impacting the view (where "impacting" the view means that column
-    //    is neither included in the view, nor used by the view filter).
+    //    is neither included in the view, nor used by the view filter);
+    //  - if the affected columns carry a ttl, they may change the lifetime of the base row, so we must execute the
+    //    full pipeline.
     if (!clustering_prefix_matches(base, view, key.key(), update.key())) {
         return false;
     }
@@ -148,7 +166,7 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
 
     bool affected = false;
     update.row().cells().for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell) {
-        affected = view.view_column(base, id);
+        affected = view.view_column(base, id) || has_ttl(base.column_at(column_kind::regular_column, id), cell);
         return stop_iteration(affected);
     });
     return affected;
