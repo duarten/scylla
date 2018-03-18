@@ -26,6 +26,8 @@ import subprocess
 import signal
 import shlex
 import threading
+import concurrent.futures
+import io
 
 boost_tests = [
     'bytes_ostream_test',
