@@ -4276,6 +4276,7 @@ static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, c
 
 void column_family::add_or_update_view(view_ptr v) {
     auto existing = find_view(_views, v);
+    v->view_info()->initialize_base_dependent_fields(*schema());
     if (existing != _views.end()) {
         *existing = std::move(v);
     } else {
