@@ -841,15 +841,6 @@ future<> mutate_MV(const dht::token& base_token,
 
     try
     {
-        // if we haven't joined the ring, write everything to batchlog because paired replicas may be stale
-        final UUID batchUUID = UUIDGen.getTimeUUID();
-
-        if (StorageService.instance.isStarting() || StorageService.instance.isJoining() || StorageService.instance.isMoving())
-        {
-            BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(),
-                                                    mutations), writeCommitLog);
-        }
-        else
         {
             List<WriteResponseHandlerWrapper> wrappers = new ArrayList<>(mutations.size());
             List<Mutation> nonPairedMutations = new LinkedList<>();
@@ -875,8 +866,7 @@ future<> mutate_MV(const dht::token& base_token,
             // which case we want to do an ordinary write so the view mutation
             // is sent to them as well.
             auto my_address = utils::fb_utilities::get_broadcast_address();
-            if (*paired_endpoint == my_address && service::get_local_storage_service().is_joined()
-                    && pending_endpoints.empty()) {
+            if (*paired_endpoint == my_address && pending_endpoints.empty()) {
                 // Note that we start here an asynchronous apply operation, and
                 // do not wait for it to complete.
                 // Note also that mutate_locally(mut) copies mut (in
