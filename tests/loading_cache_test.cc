@@ -315,7 +315,11 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading) {
         prepare().get();
         loading_cache.get_ptr(0, loader).discard_result().get();
         sleep(60ms).get();
-        BOOST_REQUIRE_MESSAGE(load_count >= 2, format("load_count is {}", load_count));
+        eventually([&] {
+            if (load_count < 2) {
+                throw std::runtime_error(format("load_count is {}", load_count));
+            }
+        });
     });
 }
 
