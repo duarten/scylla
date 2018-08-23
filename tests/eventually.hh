@@ -39,3 +39,24 @@ static void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 1
         }
     }
 }
+
+template<typename EventuallySucceedingFunction>
+static bool eventually_true(EventuallySucceedingFunction&& f) {
+    const unsigned max_attempts = 10;
+    unsigned attempts = 0;
+    while (true) {
+        if (f()) {
+            return true;
+        }
+
+        if (++attempts < max_attempts) {
+            seastar::sleep(std::chrono::milliseconds(1 << attempts)).get0();
+        } else {
+            return false;
+        }
+    }
+
+    return false;
+}
+
+#define REQUIRE_EVENTUALLY_EQUAL(a, b) BOOST_REQUIRE(eventually_true([&] { return a == b; }))
