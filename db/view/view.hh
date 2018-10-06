@@ -23,6 +23,7 @@
 
 #include "service/storage_proxy_stats.hh"
 #include "dht/i_partitioner.hh"
+#include "frozen_mutation.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema.hh"
@@ -90,7 +91,7 @@ bool matches_view_filter(const schema& base, const view_info& view, const partit
 
 bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck);
 
-future<std::vector<mutation>> generate_view_updates(
+future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
         flat_mutation_reader&& updates,
@@ -102,7 +103,10 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(
         const mutation_partition& mp,
         const std::vector<view_ptr>& views);
 
-future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats);
+future<> mutate_MV(
+        const dht::token& base_token,
+        std::vector<frozen_mutation_and_schema> view_updates,
+        db::view::stats& stats);
 
 /**
  * create_virtual_column() adds a "virtual column" to a schema builder.
