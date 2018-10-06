@@ -4465,8 +4465,8 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             return acc + m.fm.representation().size();
         });
         return seastar::get_units(*_config.view_update_concurrency_semaphore, memory_usage, timeout).then(
-                [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
+                [this, base_token = std::move(base_token), updates = std::move(updates)] (db::timeout_semaphore_units units) mutable {
+            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
         });
     });
 }
@@ -4631,7 +4631,7 @@ future<> table::populate_views(
             std::move(views),
             std::move(reader),
             { }).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
-        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
+        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, db::timeout_semaphore_units(nullptr, 0));
     });
 }
 
