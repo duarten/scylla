@@ -97,9 +97,8 @@ future<> space_watchdog::scan_one_ep_dir(boost::filesystem::path path, manager& 
 void space_watchdog::on_timer() {
     with_gate(_gate, [this] {
         return futurize_apply([this] {
-            _total_size = 0;
-
             return do_for_each(_shard_managers, [this] (manager& shard_manager) {
+                _total_size = 0;
                 shard_manager.clear_eps_with_pending_hints();
 
                 // The hints directories are organized as follows:
@@ -208,7 +207,8 @@ future<> resource_manager::prepare_per_device_limits() {
                 if (is_mountpoint) {
                     max_size *= 9;
                 }
-                _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{{std::ref(shard_manager)}, max_size});
+                auto [it, _] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{{std::ref(shard_manager)}, max_size});
+                it->second.managers.emplace_back(std::ref(shard_manager));
             });
         } else {
             it->second.managers.emplace_back(std::ref(shard_manager));
