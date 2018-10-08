@@ -4464,11 +4464,20 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         auto memory_usage = boost::accumulate(updates, size_t{0}, [] (size_t acc, const frozen_mutation_and_schema& m) {
             return acc + m.fm.representation().size();
         });
-        return seastar::get_units(*_config.view_update_concurrency_semaphore, memory_usage, timeout).then(
-                [this, base_token = std::move(base_token), updates = std::move(updates)] (db::timeout_semaphore_units units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
-        });
+        auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage);
+        db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units)).handle_exception([] (auto ignored) { });
     });
+}
+
+
+static void maybe_report_overload() {
+    constexpr seastar::lowres_clock::duration report_period = 10s;
+    static thread_local seastar::lowres_clock::time_point last_reported = seastar::lowres_clock::now() - report_period;
+    auto now = seastar::lowres_clock::now();
+    if (now > last_reported + report_period) {
+        dblog.warn("Node overloaded! Not generating view updates; a repair will be needed. Consider slowing down the clients.");
+        last_reported = now;
+    }
 }
 
 /**
@@ -4476,6 +4485,11 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
 future<row_locker::lock_holder> table::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const {
+    if (!_config.view_update_concurrency_semaphore->current()) {
+        maybe_report_overload();
+        return make_ready_future<row_locker::lock_holder>();
+    }
+
     //FIXME: Avoid unfreezing here.
     auto m = fm.unfreeze(s);
     auto& base = schema();
