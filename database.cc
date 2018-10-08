@@ -4453,14 +4453,13 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
 future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
-        flat_mutation_reader_opt existings,
-        db::timeout_clock::time_point timeout) const {
+        flat_mutation_reader_opt existings) const {
     auto base_token = m.token();
     return db::view::generate_view_updates(
             base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
-            std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
+            std::move(existings)).then([this, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         auto memory_usage = boost::accumulate(updates, size_t{0}, [] (size_t acc, const frozen_mutation_and_schema& m) {
             return acc + m.fm.representation().size();
         });
@@ -4500,7 +4499,7 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
     }
     auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
-        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, timeout).then([] {
+        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }).then([] {
                 // In this case we are not doing a read-before-write, just a
                 // write, so no lock is needed.
                 return make_ready_future<row_locker::lock_holder>();
@@ -4533,7 +4532,7 @@ future<row_locker::lock_holder> table::push_view_replica_updates(const schema_pt
                 pk,
                 slice,
                 service::get_local_sstable_query_read_priority());
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), timeout).then([lock = std::move(lock)] () mutable {
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader)).then([lock = std::move(lock)] () mutable {
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this
                 // partition/row and destroys the lock object.
