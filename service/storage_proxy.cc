@@ -495,7 +495,8 @@ void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) 
     _response_handlers.erase(id);
 }
 
-void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from) {
+
+void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from, stdx::optional<db::view::update_backlog> backlog) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second.handler->get_trace_state(), "Got a response from /{}", from);
@@ -503,15 +504,23 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
         }
     }
+    maybe_update_view_backlog_of(std::move(from), std::move(backlog));
 }
 
-void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count) {
+void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count, stdx::optional<db::view::update_backlog> backlog) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         tracing::trace(it->second.handler->get_trace_state(), "Got {} failures from /{}", count, from);
         if (it->second.handler->failure(from, count)) {
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
         }
+    }
+    maybe_update_view_backlog_of(std::move(from), std::move(backlog));
+}
+
+void storage_proxy::maybe_update_view_backlog_of(gms::inet_address replica, stdx::optional<db::view::update_backlog> backlog) {
+    if (backlog) {
+        _view_update_backlogs[replica] = {std::move(*backlog), std::chrono::system_clock::now().time_since_epoch()};
     }
 }
 
@@ -1795,7 +1804,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         return mutate_locally(std::move(s), *m, timeout).then([response_id, this, my_address, m, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
-            got_response(response_id, my_address);
+            got_response(response_id, my_address, get_local_view_update_backlog());
         });
     };
 
@@ -1829,7 +1838,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         lw_shared_ptr<const frozen_mutation> m = handler.get_mutation_for(coordinator);
 
         if (!m || (handler.is_counter() && coordinator == my_address)) {
-            got_response(response_id, coordinator);
+            got_response(response_id, coordinator, stdx::nullopt);
         } else {
             if (!handler.read_repair_write()) {
                 ++stats.writes_attempts.get_ep_stat(coordinator);
@@ -1846,7 +1855,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this(), &stats] (std::exception_ptr eptr) {
             ++stats.writes_errors.get_ep_stat(coordinator);
-            p->got_failure_response(response_id, coordinator, forward_size + 1);
+            p->got_failure_response(response_id, coordinator, forward_size + 1, stdx::nullopt);
             try {
                 std::rethrow_exception(eptr);
             } catch(rpc::closed_error&) {
@@ -4109,7 +4118,7 @@ void storage_proxy::init_messaging_service() {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
-            sp.got_response(response_id, from);
+            sp.got_response(response_id, from, stdx::nullopt);
             return netw::messaging_service::no_wait();
         });
     });
@@ -4117,7 +4126,7 @@ void storage_proxy::init_messaging_service() {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return get_storage_proxy().invoke_on(shard, [from, response_id, num_failed] (storage_proxy& sp) {
-            sp.got_failure_response(response_id, from, num_failed);
+            sp.got_failure_response(response_id, from, num_failed, stdx::nullopt);
             return netw::messaging_service::no_wait();
         });
     });
