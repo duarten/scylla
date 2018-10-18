@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
 
 namespace db::view {
 
@@ -62,6 +63,10 @@ struct update_backlog {
 
     friend bool operator>=(const update_backlog& lhs, const update_backlog& rhs) {
         return !(lhs < rhs);
+    }
+
+    static update_backlog no_backlog() {
+        return update_backlog{0, std::numeric_limits<size_t>::max()};
     }
 };
 
