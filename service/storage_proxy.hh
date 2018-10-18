@@ -269,6 +269,8 @@ private:
             std::vector<gms::inet_address> pending_endpoints,
             db::write_type type,
             write_stats& stats);
+
+    db::view::update_backlog get_local_view_update_backlog() const;
 public:
     storage_proxy(distributed<database>& db, config cfg);
     ~storage_proxy();

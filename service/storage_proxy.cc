@@ -515,6 +515,12 @@ void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms
     }
 }
 
+db::view::update_backlog storage_proxy::get_local_view_update_backlog() const {
+    auto memory_backlog = get_db().local().get_view_update_backlog();
+    auto hints_backlog = db::view::update_backlog{_hints_for_views_manager.backlog_size(), _hints_for_views_manager.max_backlog_size()};
+    return std::max(memory_backlog, hints_backlog);
+}
+
 future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& e = _response_handlers.find(id)->second;
 
