@@ -84,6 +84,8 @@
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
+#include "service/view_update_backlog_broker.hh"
+#include <charconv>
 
 namespace service {
 
@@ -4308,6 +4310,73 @@ storage_proxy::stop() {
     // FIXME: hints manager should be stopped here but it seems like this function is never called
     uninit_messaging_service();
     return make_ready_future<>();
+}
+
+view_update_backlog_broker::view_update_backlog_broker(
+        seastar::sharded<service::storage_proxy>& sp,
+        gms::gossiper& gossiper)
+        : _sp(sp)
+        , _gossiper(gossiper) {
+}
+
+future<> view_update_backlog_broker::start() {
+    _gossiper.register_(shared_from_this());
+    if (engine().cpu_id() == 0) {
+        // Gossiper runs only on shard 0, and there's no API to add multiple, per-shard application states.
+        // Also, right now we aggregate all backlogs, since the coordinator doesn't keep per-replica shard backlogs.
+        _started = seastar::async([this] {
+            while (!_as.abort_requested()) {
+                auto backlog = _sp.map_reduce0(
+                        std::mem_fn(&service::storage_proxy::get_local_view_update_backlog),
+                        db::view::update_backlog::no_backlog(),
+                        [] (db::view::update_backlog lhs, db::view::update_backlog rhs) {
+                            return std::max(lhs, rhs);
+                        }).get0();
+                auto now = std::chrono::system_clock::now().time_since_epoch();
+                _gossiper.add_local_application_state(
+                        gms::application_state::VIEW_BACKLOG,
+                        gms::versioned_value(sprint("{}:{}:{}", backlog.current, backlog.max, now.count())));
+                sleep_abortable(gms::gossiper::INTERVAL, _as).get();
+            }
+        }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
+    }
+    return make_ready_future<>();
+}
+
+future<> view_update_backlog_broker::stop() {
+    _gossiper.unregister_(shared_from_this());
+    _as.request_abort();
+    return std::move(_started);
+}
+
+void view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+    if (state == gms::application_state::VIEW_BACKLOG) {
+        size_t current;
+        size_t max;
+        std::chrono::system_clock::duration::rep ticks;
+        auto end = value.value.data() + value.value.size();
+        const char* last = value.value.data();
+        for (auto* ptr : {&current, &max}) {
+            auto* res = std::from_chars(last, end, *ptr).ptr;
+            if (last == res || res >= end) {
+                return;
+            }
+            last = res + 1;
+        }
+        auto* res = std::from_chars(last, end, ticks).ptr;
+        if (last == res || res >= end) {
+            return;
+        }
+        auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, std::chrono::system_clock::duration(ticks)};
+        auto [it, inserted] = _sp.local()._view_update_backlogs.try_emplace(endpoint, std::move(backlog));
+        if (!inserted && it->second.ts < backlog.ts) {
+            it->second = std::move(backlog);
+        }
+    }
+}
+
+void view_update_backlog_broker::on_remove(gms::inet_address endpoint) {
+    _sp.local()._view_update_backlogs.erase(endpoint);
 }
 
 }
