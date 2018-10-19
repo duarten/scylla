@@ -281,6 +281,8 @@ private:
     db::view::update_backlog get_local_view_update_backlog() const;
 
     void maybe_update_view_backlog_of(gms::inet_address, stdx::optional<db::view::update_backlog>);
+
+    future<> delay_for_base_replica_write(const service::abstract_write_response_handler&, clock_type::time_point) const;
 public:
     storage_proxy(distributed<database>& db, config cfg);
     ~storage_proxy();

@@ -1361,7 +1361,15 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id, timeout);
-        send_to_live_endpoints(std::move(handler), response_id, timeout); // response is now running and it will either complete or timeout
+        auto handler = get_write_response_handler(response_id);
+        if (get_db().local().find_column_family(handler->get_schema()).views().empty()) {
+            send_to_live_endpoints(std::move(handler), response_id, timeout); // response is now running and it will either complete or timeout
+        } else {
+            auto f = delay_for_base_replica_write(*handler, timeout);
+            f.then([sp = shared_from_this(), handler = std::move(handler), response_id, timeout] () mutable {
+                sp->send_to_live_endpoints(std::move(handler), response_id, timeout); // response is now running and it will either complete or timeout
+            });
+        }
         return std::move(f);
     });
 }
@@ -2028,6 +2036,32 @@ future<> storage_proxy::schedule_repair(std::unordered_map<dht::token, std::unor
         return make_ready_future<>();
     }
     return mutate_internal(diffs | boost::adaptors::map_values, cl, false, std::move(trace_state));
+}
+
+future<> storage_proxy::delay_for_base_replica_write(
+        const service::abstract_write_response_handler& handler,
+        clock_type::time_point timeout) const {
+    auto backlog = boost::accumulate(
+        handler.get_targets() | boost::adaptors::transformed([this] (const gms::inet_address& ep) {
+            auto it = _view_update_backlogs.find(ep);
+            if (it == _view_update_backlogs.end()) {
+                return db::view::update_backlog::no_backlog();
+            }
+            return it->second.backlog;
+        }),
+        db::view::update_backlog::no_backlog(),
+        [] (const db::view::update_backlog& lhs, const db::view::update_backlog& rhs) {
+            return std::max(lhs, rhs);
+        });
+    auto timeout_duration = timeout - clock_type::now();
+    auto timeout_limit = (75 * timeout_duration.count()) / 100;
+    auto adjust = [] (float x) { return std::pow(x / 100, 3.3219f); };
+    auto delay = std::chrono::milliseconds(clock_type::duration::rep(adjust(backlog.current) / adjust(backlog.max) * timeout_limit));
+    if (delay.count() == 0) {
+        return make_ready_future<>();
+    }
+    slogger.trace("Delaying user write due to view update backlog {}/{} by {}ms", backlog.current, backlog.max, delay.count());
+    return sleep_abortable<clock_type>(delay);
 }
 
 class abstract_read_resolver {
