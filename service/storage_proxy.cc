@@ -722,8 +722,14 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
 
+        sm::make_queue_length("current_throttled_base_writes", [this] { return _stats.current_throttled_base_writes; },
+                       sm::description("number of currently throttled base replica write requests")),
+
         sm::make_total_operations("throttled_writes", [this] { return _stats.throttled_writes; },
                        sm::description("number of throttled write requests")),
+
+        sm::make_total_operations("throttled_base_writes", [this] { return _stats.throttled_base_writes; },
+                                  sm::description("number of throttled base replica write requests")),
 
         sm::make_current_bytes("queued_write_bytes", [this] { return _stats.queued_write_bytes; },
                        sm::description("number of bytes in pending write requests")),
