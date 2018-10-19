@@ -1351,7 +1351,7 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
 future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl,
                                      stdx::optional<clock_type::time_point> timeout_opt) {
     return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
-        auto response_id = protected_response.id;
+        auto response_id = protected_response.release();
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
         // response_id handler will be removed, so we will have to do hint with separate
@@ -1361,7 +1361,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id, timeout);
-        send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
+        send_to_live_endpoints(std::move(handler), response_id, timeout); // response is now running and it will either complete or timeout
         return std::move(f);
     });
 }
@@ -1775,14 +1775,16 @@ future<> storage_proxy::send_to_endpoint(
  * @throws OverloadedException if the hints cannot be written/enqueued
  */
  // returned future is ready when sent is complete, not when mutation is executed on all (or any) targets!
-void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id, clock_type::time_point timeout)
+void storage_proxy::send_to_live_endpoints(
+        ::shared_ptr<abstract_write_response_handler> handler_ptr,
+        response_id_type response_id,
+        clock_type::time_point timeout)
 {
     // extra-datacenter replicas, grouped by dc
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
     std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
     local.reserve(3);
 
-    auto handler_ptr = get_write_response_handler(response_id);
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
 

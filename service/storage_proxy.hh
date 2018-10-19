@@ -195,7 +195,7 @@ private:
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
+    void send_to_live_endpoints(::shared_ptr<abstract_write_response_handler> handler_ptr, response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
