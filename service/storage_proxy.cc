@@ -188,7 +188,7 @@ public:
     }
 };
 
-class abstract_write_response_handler {
+class abstract_write_response_handler : public seastar::enable_shared_from_this<abstract_write_response_handler> {
 protected:
     storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
@@ -252,10 +252,11 @@ public:
         } else if (_error == error::FAILURE) {
             _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
         }
-    };
+    }
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
     }
+    // While delayed, a request is not throttled.
     void unthrottle() {
         _stats.background_writes++;
         _stats.background_write_bytes += _mutation_holder->size();
@@ -266,20 +267,23 @@ public:
         _cl_acks += nr;
         if (!_cl_achieved && _cl_acks >= _total_block_for) {
              _cl_achieved = true;
-             if (_proxy->need_throttle_writes()) {
-                 _throttled = true;
-                 _proxy->_throttled_writes.push_back(_id);
-                 ++_stats.throttled_writes;
-             } else {
-                 unthrottle();
-             }
-         }
+            delay([] (abstract_write_response_handler* self) {
+                if (self->_proxy->need_throttle_writes()) {
+                    self->_throttled = true;
+                    self->_proxy->_throttled_writes.push_back(self->_id);
+                    ++self->_stats.throttled_writes;
+                } else {
+                    self->unthrottle();
+                }
+            });
+        }
     }
     virtual bool failure(gms::inet_address from, size_t count) {
         if (waited_for(from)) {
             _failed += count;
             if (_total_block_for + _failed > _total_endpoints) {
                 _error = error::FAILURE;
+                delay([] (abstract_write_response_handler*) { });
                 return true;
             }
         }
@@ -290,6 +294,10 @@ public:
             slogger.trace("Write is not acknowledged by {} replicas after achieving CL", get_targets());
         }
         _error = error::TIMEOUT;
+        // We don't delay request completion after a timeout, but its possible we are currently delaying.
+    }
+    void release_mutation() {
+        _mutation_holder.release();
     }
     // return true on last ack
     bool response(gms::inet_address from) {
@@ -345,6 +353,36 @@ public:
 
         on_timeout();
         _proxy->remove_response_handler(_id);
+    }
+    // Calculates how much to delay completing the request. The delay adds to the request's inherent latency.
+    template<typename Func>
+    void delay(Func&& on_resume) {
+        auto backlog = boost::accumulate(
+                get_targets() | boost::adaptors::transformed([this] (gms::inet_address ep) {
+                    return _proxy->get_backlog_of(ep);
+                }),
+                db::view::update_backlog::no_backlog(),
+                [] (const db::view::update_backlog& lhs, const db::view::update_backlog& rhs) {
+                    return std::max(lhs, rhs);
+                });
+        constexpr auto delay_limit_ms = 1000;
+        auto adjust = [] (float x) { return x * x; };
+        auto delay = std::chrono::milliseconds(storage_proxy::clock_type::duration::rep(
+                adjust(backlog.relative_size()) * delay_limit_ms));
+        if (delay.count() == 0) {
+            on_resume(this);
+        } else {
+            ++stats().throttled_base_writes;
+            slogger.trace("Delaying user write due to view update backlog {}/{} by {}ms",
+                          backlog.current, backlog.max, delay.count());
+            // Currently, we can delay the reply past the user-specified timeout. This assumes that timeout is meant
+            // to inform the coordinator about when it should give up on obtaining replies from the replicas. More
+            // importantly, this assumes the client is still interested in the reply after said timeout has elapsed.
+            sleep_abortable<storage_proxy::clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
+                --self->stats().throttled_base_writes;
+                on_resume(self.get());
+            });
+        }
     }
     future<> wait() {
         return _ready.get_future();
@@ -518,7 +556,9 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
 }
 
 void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
-    _response_handlers.erase(id);
+    auto entry = _response_handlers.find(id);
+    entry->second.handler->release_mutation();
+    _response_handlers.erase(std::move(entry));
 }
 
 
