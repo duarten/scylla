@@ -4619,7 +4619,12 @@ future<> table::populate_views(
             std::move(views),
             std::move(reader),
             { }).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
-        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, db::timeout_semaphore_units());
+        return seastar::get_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates)).then(
+                [base_token = std::move(base_token),
+                 updates = std::move(updates),
+                 this] (db::timeout_semaphore_units&& units) mutable {
+            return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats, std::move(units));
+        });
     });
 }
 
