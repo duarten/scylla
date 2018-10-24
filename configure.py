@@ -1286,7 +1286,7 @@ with open(buildfile, 'w') as f:
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))
-        f.write('build build/$mode/scylla-package.tar: package build/{mode}/scylla build/{mode}/iotune\n'.format(**locals()))
+        f.write('build build/{mode}/scylla-package.tar.gz: package build/{mode}/scylla build/{mode}/iotune build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE | always\n'.format(**locals()))
         f.write('    mode = {mode}\n'.format(**locals()))
         f.write('rule libdeflate.{mode}\n'.format(**locals()))
         f.write('    command = make -C libdeflate BUILD_DIR=../build/{mode}/libdeflate/ CFLAGS="{libdeflate_cflags}" CC={args.cc}\n'.format(**locals()))
@@ -1307,4 +1307,10 @@ with open(buildfile, 'w') as f:
             description = CLEAN
         build clean: clean
         default {modes_list}
+        ''').format(modes_list=' '.join(build_modes), **globals()))
+    f.write(textwrap.dedent('''\
+        build always: phony
+        rule scylla_version_gen
+            command = ./SCYLLA-VERSION-GEN
+        build build/SCYLLA-RELEASE-FILE build/SCYLLA-VERSION-FILE: scylla_version_gen
         ''').format(modes_list=' '.join(build_modes), **globals()))
