@@ -561,6 +561,14 @@ db::view::update_backlog storage_proxy::get_local_view_update_backlog() const {
     return std::max(memory_backlog, hints_backlog);
 }
 
+db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) const {
+    auto it = _view_update_backlogs.find(ep);
+    if (it == _view_update_backlogs.end()) {
+        return db::view::update_backlog::no_backlog();
+    }
+    return it->second.backlog;
+}
+
 future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& e = _response_handlers.find(id)->second;
 
