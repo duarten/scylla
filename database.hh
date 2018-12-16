@@ -1186,7 +1186,7 @@ private:
     static const size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
-    size_t max_memory_pending_view_updates() const { return _dbcfg.available_memory * 0.1; }
+    size_t max_memory_pending_view_updates() const { return std::min(size_t(_dbcfg.available_memory * 0.1), size_t(512 * 1024 * 1024)); }
 
     struct db_stats {
         uint64_t total_writes = 0;

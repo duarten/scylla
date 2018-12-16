@@ -377,8 +377,11 @@ public:
                 [] (const db::view::update_backlog& lhs, const db::view::update_backlog& rhs) {
                     return std::max(lhs, rhs);
                 });
-        constexpr auto delay_limit_us = 1000000;
-        auto adjust = [] (float x) { return std::pow(x, x); };
+        constexpr auto delay_limit_us = 2000000;
+        auto adjust = [] (float x) {
+            return x;
+            //return std::pow(x, 3);
+        };
         auto budget = std::chrono::microseconds(_expire_timer.get_timeout() - storage_proxy::clock_type::now());
         auto delay = std::min(
                 budget,
@@ -608,8 +611,9 @@ void storage_proxy::maybe_update_view_backlog_of(gms::inet_address replica, stdx
 
 db::view::update_backlog storage_proxy::get_view_update_backlog() const {
     auto memory_backlog = get_db().local().get_view_update_backlog();
-    auto hints_backlog = db::view::update_backlog{_hints_for_views_manager.backlog_size(), _hints_for_views_manager.max_backlog_size()};
-    return _max_view_update_backlog.add_fetch(engine().cpu_id(), std::max(memory_backlog, hints_backlog));
+    //auto hints_backlog = db::view::update_backlog{_hints_for_views_manager.backlog_size(), _hints_for_views_manager.max_backlog_size()};
+    //return _max_view_update_backlog.add_fetch(engine().cpu_id(), std::max(memory_backlog, hints_backlog));
+    return _max_view_update_backlog.add_fetch(engine().cpu_id(), memory_backlog);
 }
 
 db::view::update_backlog storage_proxy::get_backlog_of(gms::inet_address ep) const {
