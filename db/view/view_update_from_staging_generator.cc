@@ -25,20 +25,20 @@ namespace db::view {
 
 future<> view_update_from_staging_generator::start() {
     _started = seastar::async([this]() mutable {
-      while (!_as.abort_requested()) {
-        while (!_sstables_with_tables.empty()) {
-            auto& entry = _sstables_with_tables.front();
-            schema_ptr s = entry.t->schema();
-            flat_mutation_reader staging_sstable_reader = entry.sst->read_rows_flat(s);
-            auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, entry.sst, _as), db::no_timeout);
-            if (result == stop_iteration::no) {
-                entry.t->move_sstable_from_staging_in_thread(entry.sst);
-                _registration_sem.signal();
-                _sstables_with_tables.pop_front();
+        while (!_as.abort_requested()) {
+            while (!_sstables_with_tables.empty()) {
+                auto& entry = _sstables_with_tables.front();
+                schema_ptr s = entry.t->schema();
+                flat_mutation_reader staging_sstable_reader = entry.sst->read_rows_flat(s);
+                auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, _proxy, entry.sst, _as), db::no_timeout);
+                if (result == stop_iteration::no) {
+                    entry.t->move_sstable_from_staging_in_thread(entry.sst);
+                    _registration_sem.signal();
+                    _sstables_with_tables.pop_front();
+                }
             }
+            _pending_sstables.wait();
         }
-        _pending_sstables.wait();
-      }
     });
     return make_ready_future<>();
 }
